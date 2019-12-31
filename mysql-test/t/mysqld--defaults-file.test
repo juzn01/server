@@ -29,3 +29,10 @@ exec $MYSQLD --defaults-file=with.ext --print-defaults 2>&1;
 --error 1
 exec $MYSQLD --defaults-file=no_extension --print-defaults 2>&1;
 
+--echo #
+--echo # MDEV-21374: When "--help --verbose" prints out configuration file paths,
+--echo # the --defaults-file option is not considered
+--echo #
+
+exec $MYSQLD --defaults-file=$MYSQLTEST_VARDIR/my.cnf --help --verbose | grep -A 2 'Default options are read';
+
