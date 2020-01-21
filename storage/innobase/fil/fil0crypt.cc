@@ -1,6 +1,6 @@
 /*****************************************************************************
 Copyright (C) 2013, 2015, Google Inc. All Rights Reserved.
-Copyright (c) 2014, 2019, MariaDB Corporation.
+Copyright (c) 2014, 2020, MariaDB Corporation.
 
 This program is free software; you can redistribute it and/or modify it under
 the terms of the GNU General Public License as published by the Free Software
@@ -31,6 +31,7 @@ Modified           Jan Lindström jan.lindstrom@mariadb.com
 #ifdef UNIV_INNOCHECKSUM
 # include "buf0buf.h"
 #else
+#include "buf0dblwr.h"
 #include "srv0srv.h"
 #include "srv0start.h"
 #include "mtr0mtr.h"
