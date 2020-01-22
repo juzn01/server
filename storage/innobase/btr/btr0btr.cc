@@ -1365,17 +1365,14 @@ btr_write_autoinc(dict_index_t* index, ib_uint64_t autoinc, bool reset)
 	mtr.commit();
 }
 
-/** Reorganize an index page. */
-static void
-btr_page_reorganize_low(
-	bool		recovery,/*!< in: true if called in recovery:
-				locks should not be updated, i.e.,
-				there cannot exist locks on the
-				page, and a hash index should not be
-				dropped: it cannot exist */
-	page_cur_t*	cursor,	/*!< in/out: page cursor */
-	dict_index_t*	index,	/*!< in: the index tree of the page */
-	mtr_t*		mtr)	/*!< in/out: mini-transaction */
+/** Reorganize an index page.
+@tparam recovery   whether this is invoked by btr_parse_page_reorganize()
+@param cursor      index page cursor
+@param index       the index that the cursor belongs to
+@param mtr         mini-transaction */
+template<bool recovery= false>
+static void btr_page_reorganize_low(page_cur_t *cursor, dict_index_t *index,
+                                    mtr_t *mtr)
 {
 	buf_block_t*	block		= page_cur_get_block(cursor);
 	buf_pool_t*	buf_pool	= buf_pool_from_bpage(&block->page);
@@ -1399,8 +1396,6 @@ btr_page_reorganize_low(
 	      || !page_has_siblings(page));
 	data_size1 = page_get_data_size(page);
 	max_ins_size1 = page_get_max_insert_size_after_reorganize(page, 1);
-	/* Turn logging off */
-	mtr_log_t	log_mode = mtr_set_log_mode(mtr, MTR_LOG_NONE);
 
 	temp_block = buf_block_alloc(buf_pool);
 
@@ -1435,30 +1430,25 @@ btr_page_reorganize_low(
 					index, mtr);
 
 	/* Copy the PAGE_MAX_TRX_ID or PAGE_ROOT_AUTO_INC. */
-	static_assert((PAGE_HEADER + PAGE_MAX_TRX_ID) % 8 == 0, "alignment");
-	memcpy_aligned<8>(&block->frame[PAGE_HEADER + PAGE_MAX_TRX_ID],
-			  &temp_block->frame[PAGE_HEADER + PAGE_MAX_TRX_ID],
-			  8);
-	/* PAGE_MAX_TRX_ID is unused in clustered index pages
-	(other than the root where it is repurposed as PAGE_ROOT_AUTO_INC),
-	non-leaf pages, and in temporary tables. It was always
-	zero-initialized in page_create() in all InnoDB versions.
-	PAGE_MAX_TRX_ID must be nonzero on dict_index_is_sec_or_ibuf()
-	leaf pages.
-
-	During redo log apply, dict_index_is_sec_or_ibuf() always
-	holds, even for clustered indexes. */
-	ut_ad(recovery || index->table->is_temporary()
-	      || !page_is_leaf(temp_block->frame)
-	      || !dict_index_is_sec_or_ibuf(index)
-	      || page_get_max_trx_id(block->frame) != 0);
-	/* PAGE_MAX_TRX_ID must be zero on non-leaf pages other than
-	clustered index root pages. */
-	ut_ad(recovery
-	      || page_get_max_trx_id(block->frame) == 0
-	      || (dict_index_is_sec_or_ibuf(index)
-		  ? page_is_leaf(temp_block->frame)
-		  : block->page.id.page_no() == index->page));
+	ut_ad(!page_get_max_trx_id(block->frame));
+	if (trx_id_t trx_id = page_get_max_trx_id(temp_block->frame)) {
+		/* PAGE_MAX_TRX_ID must be zero on non-leaf pages other than
+		clustered index root pages. */
+		ut_ad(recovery || (dict_index_is_sec_or_ibuf(index)
+				   ? page_is_leaf(temp_block->frame)
+				   : block->page.id.page_no() == index->page));
+		page_set_max_trx_id(block, NULL, trx_id, mtr);
+	} else {
+		/* PAGE_MAX_TRX_ID is unused in clustered index pages
+		(other than the root where it is repurposed as
+		PAGE_ROOT_AUTO_INC), non-leaf pages, and in temporary tables.
+		It was always zero-initialized in page_create().
+		PAGE_MAX_TRX_ID must be nonzero on
+		dict_index_is_sec_or_ibuf() leaf pages. */
+		ut_ad(recovery || index->table->is_temporary()
+		      || !page_is_leaf(temp_block->frame)
+		      || !dict_index_is_sec_or_ibuf(index));
+	}
 
 	data_size2 = page_get_data_size(block->frame);
 	max_ins_size2 = page_get_max_insert_size_after_reorganize(block->frame,
@@ -1515,23 +1505,17 @@ btr_page_reorganize_low(
 
 	buf_block_free(temp_block);
 
-	/* Restore logging mode */
-	mtr_set_log_mode(mtr, log_mode);
-
-	mlog_open_and_write_index(mtr, page, index, page_is_comp(page)
-				  ? MLOG_COMP_PAGE_REORGANIZE
-				  : MLOG_PAGE_REORGANIZE, 0);
 	MONITOR_INC(MONITOR_INDEX_REORG_SUCCESSFUL);
 
-	if (UNIV_UNLIKELY(fil_page_get_type(block->frame)
-			  == FIL_PAGE_TYPE_INSTANT)) {
+	if (!recovery && UNIV_UNLIKELY(fil_page_get_type(block->frame)
+				       == FIL_PAGE_TYPE_INSTANT)) {
 		/* Log the PAGE_INSTANT information. */
 		ut_ad(index->is_instant());
-		ut_ad(!recovery);
 		mtr->write<2,mtr_t::FORCED>(*block, FIL_PAGE_TYPE
 					    + block->frame,
 					    FIL_PAGE_TYPE_INSTANT);
-		byte* instant = PAGE_HEADER + PAGE_INSTANT + block->frame;
+		byte* instant = my_assume_aligned<2>(PAGE_HEADER + PAGE_INSTANT
+						     + block->frame);
 		mtr->write<2,mtr_t::FORCED>(*block, instant,
 					    mach_read_from_2(instant));
 		if (!index->table->instant) {
@@ -1558,12 +1542,6 @@ IBUF_BITMAP_FREE is unaffected by reorganization.
 @retval false if it is a compressed page, and recompression failed */
 bool
 btr_page_reorganize_block(
-/*======================*/
-	bool		recovery,/*!< in: true if called in recovery:
-				locks should not be updated, i.e.,
-				there cannot exist locks on the
-				page, and a hash index should not be
-				dropped: it cannot exist */
 	ulint		z_level,/*!< in: compression level to be used
 				if dealing with compressed page */
 	buf_block_t*	block,	/*!< in/out: B-tree page */
@@ -1577,7 +1555,7 @@ btr_page_reorganize_block(
 	page_cur_t	cur;
 	page_cur_set_before_first(block, &cur);
 
-	btr_page_reorganize_low(recovery, &cur, index, mtr);
+	btr_page_reorganize_low(&cur, index, mtr);
 	return true;
 }
 
@@ -1600,7 +1578,7 @@ btr_page_reorganize(
 	mtr_t*		mtr)	/*!< in/out: mini-transaction */
 {
 	if (!buf_block_get_page_zip(cursor->block)) {
-		btr_page_reorganize_low(false, cursor, index, mtr);
+		btr_page_reorganize_low(cursor, index, mtr);
 		return true;
 	}
 
@@ -1622,6 +1600,7 @@ btr_page_reorganize(
 /***********************************************************//**
 Parses a redo log record of reorganizing a page.
 @return end of log record or NULL */
+ATTRIBUTE_COLD /* only used when crash-upgrading */
 const byte*
 btr_parse_page_reorganize(
 /*======================*/
@@ -1654,8 +1633,13 @@ btr_parse_page_reorganize(
 		level = page_zip_level;
 	}
 
-	if (block != NULL) {
-		btr_page_reorganize_block(true, level, block, index, mtr);
+	if (block == NULL) {
+	} else if (block->page.zip.data) {
+		page_zip_reorganize(block, index, level, mtr, true);
+	} else {
+		page_cur_t cur;
+		page_cur_set_before_first(block, &cur);
+		btr_page_reorganize_low<true>(&cur, index, mtr);
 	}
 
 	return(ptr);
@@ -3163,6 +3147,7 @@ void btr_level_list_remove(const buf_block_t& block, const dict_index_t& index,
 Parses the redo log record for setting an index record as the predefined
 minimum record.
 @return end of log record or NULL */
+ATTRIBUTE_COLD /* only used when crash-upgrading */
 const byte*
 btr_parse_set_min_rec_mark(
 /*=======================*/
@@ -5183,12 +5168,9 @@ btr_can_merge_with_page(
 	max_ins_size = page_get_max_insert_size(mpage, n_recs);
 
 	if (data_size > max_ins_size) {
-
 		/* We have to reorganize mpage */
-
-		if (!btr_page_reorganize_block(
-			    false, page_zip_level, mblock, index, mtr)) {
-
+		if (!btr_page_reorganize_block(page_zip_level, mblock, index,
+					       mtr)) {
 			goto error;
 		}
 
