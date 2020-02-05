@@ -1,5 +1,5 @@
 # Copyright (c) 2009, 2010, Oracle and/or its affiliates. All rights reserved.
-# 
+#
 # This program is free software; you can redistribute it and/or modify
 # it under the terms of the GNU General Public License as published by
 # the Free Software Foundation; version 2 of the License.
@@ -36,7 +36,7 @@ FUNCTION (MYSQL_ADD_EXECUTABLE)
   )
   LIST(GET ARG_UNPARSED_ARGUMENTS 0 target)
   LIST(REMOVE_AT  ARG_UNPARSED_ARGUMENTS 0)
-  
+
   SET(sources ${ARG_UNPARSED_ARGUMENTS})
   ADD_VERSION_INFO(${target} EXECUTABLE sources)
 
@@ -80,6 +80,20 @@ FUNCTION (MYSQL_ADD_EXECUTABLE)
       RETURN()
     ENDIF()
     MYSQL_INSTALL_TARGETS(${target} DESTINATION ${ARG_DESTINATION} COMPONENT ${COMP})
+  ENDIF()
+
+  # set name of binary
+  list(FIND MARIADB_SYMLINK_TOS ${target} _index)
+  message(STATUS "**********" ${target})
+
+  if (${_index} GREATER -1)
+    list(GET MARIADB_SYMLINK_FROMS ${_index} mariadbname)
+  endif()
+
+  message(STATUS "**********" ${mariadbname})
+
+  IF(NOT ${mariadbname} STREQUAL "")
+    SET_TARGET_PROPERTIES(${target} PROPERTIES OUTPUT_NAME ${mariadbname})
   ENDIF()
 
   # create mariadb named symlink
