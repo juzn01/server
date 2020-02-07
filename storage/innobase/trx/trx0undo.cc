@@ -1,7 +1,7 @@
 /*****************************************************************************
 
 Copyright (c) 1996, 2016, Oracle and/or its affiliates. All Rights Reserved.
-Copyright (c) 2014, 2019, MariaDB Corporation.
+Copyright (c) 2014, 2020, MariaDB Corporation.
 
 This program is free software; you can redistribute it and/or modify it under
 the terms of the GNU General Public License as published by the Free Software
@@ -392,9 +392,6 @@ static void trx_undo_page_init(const buf_block_t *undo_block, mtr_t *mtr)
 	case MTR_LOG_NONE:
 	case MTR_LOG_NO_REDO:
 		return;
-	case MTR_LOG_SHORT_INSERTS:
-		ut_ad(0);
-		/* fall through */
 	case MTR_LOG_ALL:
 		break;
 	}
