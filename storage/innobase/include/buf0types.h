@@ -1,7 +1,7 @@
 /*****************************************************************************
 
 Copyright (c) 1995, 2015, Oracle and/or its affiliates. All rights reserved.
-Copyright (c) 2019, MariaDB Corporation.
+Copyright (c) 2019, 2020, MariaDB Corporation.
 
 This program is free software; you can redistribute it and/or modify it under
 the terms of the GNU General Public License as published by the Free Software
@@ -44,8 +44,6 @@ struct buf_pool_stat_t;
 struct buf_buddy_stat_t;
 /** Doublewrite memory struct */
 struct buf_dblwr_t;
-/** Flush observer for bulk create index */
-class FlushObserver;
 
 /** A buffer frame. @see page_t */
 typedef	byte	buf_frame_t;

@@ -2,7 +2,7 @@
 
 Copyright (c) 1995, 2018, Oracle and/or its affiliates. All Rights Reserved.
 Copyright (c) 2008, Google Inc.
-Copyright (c) 2013, 2019, MariaDB Corporation.
+Copyright (c) 2013, 2020, MariaDB Corporation.
 
 Portions of this file contain modifications contributed and copyrighted by
 Google, Inc. Those modifications are gratefully acknowledged and are described
@@ -1496,7 +1496,6 @@ buf_block_init(
 	block->page.state = BUF_BLOCK_NOT_USED;
 	block->page.buf_fix_count = 0;
 	block->page.io_fix = BUF_IO_NONE;
-	block->page.flush_observer = NULL;
 	block->page.init_on_flush = false;
 	block->page.real_size = 0;
 	block->page.write_size = 0;
@@ -5336,7 +5335,6 @@ buf_page_init_for_read(
 
 		bpage->state = BUF_BLOCK_ZIP_PAGE;
 		bpage->id = page_id;
-		bpage->flush_observer = NULL;
 		bpage->init_on_flush = false;
 
 		ut_d(bpage->in_page_hash = FALSE);

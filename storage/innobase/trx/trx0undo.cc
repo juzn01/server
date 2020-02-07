@@ -749,7 +749,7 @@ trx_undo_free_page(
 
 	fseg_free_page(TRX_UNDO_SEG_HDR + TRX_UNDO_FSEG_HEADER
 		       + header_block->frame,
-		       rseg->space, page_no, false, true, mtr);
+		       rseg->space, page_no, false, mtr);
 
 	const fil_addr_t last_addr = flst_get_last(
 		TRX_UNDO_SEG_HDR + TRX_UNDO_PAGE_LIST + header_block->frame);
