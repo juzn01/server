@@ -259,20 +259,14 @@ static bool xa_trans_rolled_back(XID_cache_element *element)
 bool xa_trans_force_rollback(THD *thd)
 {
   bool rc= false;
-  XID_STATE &xid_state= thd->transaction.xid_state;
-  enum xa_option_words xa_opt_saved= thd->lex->xa_opt;
 
-  if (xid_state.xid_cache_element->xa_state != XA_PREPARED)
-    thd->lex->xa_opt= XA_ONE_PHASE; // to force binlog regular ROLLBACK
   if (ha_rollback_trans(thd, true))
   {
     my_error(ER_XAER_RMERR, MYF(0));
     rc= true;
   }
-  thd->lex->xa_opt= xa_opt_saved;
-
-  thd->variables.option_bits&= ~(OPTION_BEGIN | OPTION_KEEP_LOG);
-  thd->variables.option_bits&= ~OPTION_GTID_BEGIN;
+  thd->variables.option_bits&=
+    ~(OPTION_BEGIN | OPTION_KEEP_LOG | OPTION_GTID_BEGIN);
   thd->transaction.all.reset();
   thd->server_status&=
     ~(SERVER_STATUS_IN_TRANS | SERVER_STATUS_IN_TRANS_READONLY);

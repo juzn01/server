@@ -1912,12 +1912,8 @@ binlog_rollback_flush_trx_cache(THD *thd, bool all,
   char buf[q_len + ser_buf_size]= "ROLLBACK";
   size_t buflen= sizeof("ROLLBACK") - 1;
 
-  if (thd->lex->sql_command == SQLCOM_XA_ROLLBACK)
+  if (thd->transaction.xid_state.is_explicit_XA())
   {
-    DBUG_ASSERT(thd->transaction.xid_state.is_explicit_XA());
-    DBUG_ASSERT(thd->transaction.xid_state.xid_cache_element->xa_state ==
-                XA_PREPARED ||
-                thd->transaction.xid_state.xid_cache_element->xa_state == XA_IDLE);
     /* for not prepared use plain ROLLBACK */
     if (thd->transaction.xid_state.xid_cache_element->xa_state == XA_PREPARED)
       buflen= serialize_with_xid(thd->transaction.xid_state.get_xid(),

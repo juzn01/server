@@ -3219,18 +3219,16 @@ Gtid_log_event::Gtid_log_event(THD *thd_arg, uint64 seq_no_arg,
   /* Preserve any DDL or WAITED flag in the slave's binlog. */
   if (thd_arg->rgi_slave)
     flags2|= (thd_arg->rgi_slave->gtid_ev_flags2 & (FL_DDL|FL_WAITED));
-  /*
-    A non-transaction DML in the middle of XA can create own separate from
-    the transaction GTID and event group.
-  */
+
   XID_STATE &xid_state= thd->transaction.xid_state;
-  if (is_transactional &&
-      xid_state.is_explicit_XA() &&
-      thd->lex->xa_opt != XA_ONE_PHASE)
+  if (is_transactional && xid_state.is_explicit_XA() &&
+      ((xid_state.xid_cache_element->xa_state == XA_IDLE &&
+        thd->lex->sql_command == SQLCOM_XA_PREPARE) ||
+       xid_state.xid_cache_element->xa_state == XA_PREPARED))
   {
+    DBUG_ASSERT(thd->lex->xa_opt != XA_ONE_PHASE);
     DBUG_ASSERT(xid_state.xid_cache_element->xa_state == XA_IDLE ||
-                (xid_state.is_binlogged() &&
-                 xid_state.xid_cache_element->xa_state == XA_PREPARED));
+                xid_state.is_binlogged());
 
     flags2|= xid_state.xid_cache_element->xa_state == XA_IDLE ?
       FL_PREPARED_XA : FL_COMPLETED_XA;
