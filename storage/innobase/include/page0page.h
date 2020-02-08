@@ -840,15 +840,6 @@ page_rec_is_second_last(
 	const page_t*	page)	/*!< in: page */
 	MY_ATTRIBUTE((warn_unused_result));
 
-/***************************************************************//**
-Looks for the record which owns the given record.
-@return the owner record */
-UNIV_INLINE
-rec_t*
-page_rec_find_owner_rec(
-/*====================*/
-	rec_t*	rec);	/*!< in: the physical record */
-
 /************************************************************//**
 Returns the maximum combined size of records which can be inserted on top
 of record heap.
