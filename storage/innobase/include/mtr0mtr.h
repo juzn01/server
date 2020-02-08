@@ -190,7 +190,7 @@ struct mtr_t {
 	fil_space_t* set_named_space_id(ulint space_id)
 	{
 		ut_ad(!m_user_space_id);
-		ut_d(m_user_space_id = space_id);
+		ut_d(m_user_space_id = static_cast<uint32_t>(space_id));
 		if (!space_id) {
 			return fil_system.sys_space;
 		} else {
@@ -208,7 +208,7 @@ struct mtr_t {
 	void set_named_space(fil_space_t* space)
 	{
 		ut_ad(!m_user_space_id);
-		ut_d(m_user_space_id = space->id);
+		ut_d(m_user_space_id = static_cast<uint32_t>(space->id));
 		if (space->id) {
 			m_user_space = space;
 		}
