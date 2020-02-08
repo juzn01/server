@@ -82,26 +82,21 @@ PageBulk::init()
 		new_page = buf_block_get_frame(new_block);
 		new_page_no = page_get_page_no(new_page);
 
-		byte* index_id = PAGE_HEADER + PAGE_INDEX_ID + new_page;
+		byte* index_id = my_assume_aligned<2>
+			(PAGE_HEADER + PAGE_INDEX_ID + new_page);
+		compile_time_assert(FIL_PAGE_NEXT == FIL_PAGE_PREV + 4);
+		compile_time_assert(FIL_NULL == 0xffffffff);
+		memset_aligned<8>(new_page + FIL_PAGE_PREV, 0xff, 8);
 
 		if (UNIV_LIKELY_NULL(new_block->page.zip.data)) {
+			mach_write_to_8(index_id, m_index->id);
 			page_create_zip(new_block, m_index, m_level, 0,
 					&m_mtr);
-			static_assert(FIL_PAGE_PREV % 8 == 0, "alignment");
-			memset_aligned<8>(FIL_PAGE_PREV + new_page, 0xff, 8);
-			page_zip_write_header(new_block,
-					      FIL_PAGE_PREV + new_page,
-					      8, &m_mtr);
-			mach_write_to_8(index_id, m_index->id);
-			page_zip_write_header(new_block, index_id, 8, &m_mtr);
 		} else {
 			ut_ad(!m_index->is_spatial());
 			page_create(new_block, &m_mtr,
 				    m_index->table->not_redundant());
-			compile_time_assert(FIL_PAGE_NEXT
-					    == FIL_PAGE_PREV + 4);
-			compile_time_assert(FIL_NULL == 0xffffffff);
-			m_mtr.memset(new_block, FIL_PAGE_PREV, 8, 0xff);
+			m_mtr.memset(*new_block, FIL_PAGE_PREV, 8, 0xff);
 			m_mtr.write<2,mtr_t::OPT>(*new_block,
 						  PAGE_HEADER + PAGE_LEVEL
 						  + new_page, m_level);
@@ -383,16 +378,17 @@ inline void PageBulk::finishPage()
                               PAGE_HEADER + PAGE_N_DIR_SLOTS + m_page,
                               1 + static_cast<ulint>(slot0 - slot) /
                               PAGE_DIR_SLOT_SIZE);
+    /* FIXME: combine writes */
     m_mtr.write<2>(*m_block, PAGE_HEADER + PAGE_HEAP_TOP + m_page,
                    static_cast<ulint>(m_heap_top - m_page));
     m_mtr.write<2>(*m_block, PAGE_HEADER + PAGE_N_HEAP + m_page,
                    (PAGE_HEAP_NO_USER_LOW + m_rec_no) |
                    uint16_t{fmt != REDUNDANT} << 15);
-    m_mtr.write<2>(*m_block, PAGE_HEADER + PAGE_N_RECS + m_page, m_rec_no);
     m_mtr.write<2>(*m_block, PAGE_HEADER + PAGE_LAST_INSERT + m_page,
                    static_cast<ulint>(m_cur_rec - m_page));
     m_mtr.write<2>(*m_block, PAGE_HEADER + PAGE_DIRECTION_B - 1 + m_page,
                    PAGE_RIGHT);
+    m_mtr.write<2>(*m_block, PAGE_HEADER + PAGE_N_RECS + m_page, m_rec_no);
   }
   else
   {
