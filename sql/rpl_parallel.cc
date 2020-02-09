@@ -2293,7 +2293,7 @@ free_rpl_parallel_entry(void *element)
 
 
 rpl_parallel::rpl_parallel() :
-  current(NULL), sql_thread_stopping(false)
+  current(NULL), sql_thread_stopping(false), xid_cache_inited(false)
 {
   my_hash_init(&domain_hash, &my_charset_bin, 32,
                offsetof(rpl_parallel_entry, domain_id), sizeof(uint32),
