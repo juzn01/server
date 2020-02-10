@@ -86,13 +86,13 @@ MYSQL_ADD_EXECUTABLE(mariabackup
 
 
 # Export all symbols on Unix, for better crash callstacks
-SET_TARGET_PROPERTIES(mariabackup PROPERTIES ENABLE_EXPORTS TRUE)
+SET_TARGET_PROPERTIES(mariadb-backup PROPERTIES ENABLE_EXPORTS TRUE)
 ADD_SUBDIRECTORY(crc)
 
 
-TARGET_LINK_LIBRARIES(mariabackup sql sql_builtins crc)
+TARGET_LINK_LIBRARIES(mariadb-backup sql sql_builtins crc)
 IF(NOT HAVE_SYSTEM_REGEX)
-  TARGET_LINK_LIBRARIES(mariabackup pcre2-posix)
+  TARGET_LINK_LIBRARIES(mariadb-backup pcre2-posix)
 ENDIF()
 
 

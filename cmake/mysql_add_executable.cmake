@@ -62,7 +62,23 @@ FUNCTION (MYSQL_ADD_EXECUTABLE)
   ELSE()
     UNSET(EXCLUDE_FROM_ALL)
   ENDIF()
-  ADD_EXECUTABLE(${target} ${WIN32} ${MACOSX_BUNDLE} ${EXCLUDE_FROM_ALL} ${sources})
+
+  # set name of binary
+  list(FIND MARIADB_SYMLINK_TOS ${target} _index)
+  message(STATUS "********** target: " ${target})
+
+  if (${_index} GREATER -1)
+    list(GET MARIADB_SYMLINK_FROMS ${_index} mariadbname)
+  endif()
+
+  message(STATUS "********** mariadbname: " ${mariadbname})
+
+  IF(NOT ${mariadbname} STREQUAL "")
+    ADD_EXECUTABLE(${mariadbname} ${WIN32} ${MACOSX_BUNDLE} ${EXCLUDE_FROM_ALL} ${sources})
+    SET_TARGET_PROPERTIES(${mariadbname} PROPERTIES OUTPUT_NAME ${mariadbname})
+  ELSE()
+    ADD_EXECUTABLE(${target} ${WIN32} ${MACOSX_BUNDLE} ${EXCLUDE_FROM_ALL} ${sources})  
+  ENDIF()
 
   # tell CPack where to install
   IF(NOT ARG_EXCLUDE_FROM_ALL)
@@ -79,21 +95,12 @@ FUNCTION (MYSQL_ADD_EXECUTABLE)
     IF (COMP MATCHES ${SKIP_COMPONENTS})
       RETURN()
     ENDIF()
-    MYSQL_INSTALL_TARGETS(${target} DESTINATION ${ARG_DESTINATION} COMPONENT ${COMP})
-  ENDIF()
-
-  # set name of binary
-  list(FIND MARIADB_SYMLINK_TOS ${target} _index)
-  message(STATUS "**********" ${target})
-
-  if (${_index} GREATER -1)
-    list(GET MARIADB_SYMLINK_FROMS ${_index} mariadbname)
-  endif()
-
-  message(STATUS "**********" ${mariadbname})
-
-  IF(NOT ${mariadbname} STREQUAL "")
-    SET_TARGET_PROPERTIES(${target} PROPERTIES OUTPUT_NAME ${mariadbname})
+    
+    IF(NOT ${mariadbname} STREQUAL "")
+      MYSQL_INSTALL_TARGETS(${mariadbname} DESTINATION ${ARG_DESTINATION} COMPONENT ${COMP})
+    ELSE()
+      MYSQL_INSTALL_TARGETS(${target} DESTINATION ${ARG_DESTINATION} COMPONENT ${COMP})
+    ENDIF()
   ENDIF()
 
   # create mariadb named symlink

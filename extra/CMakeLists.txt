@@ -106,9 +106,9 @@ IF(UNIX)
   MYSQL_ADD_EXECUTABLE(resolve_stack_dump resolve_stack_dump.c)
   TARGET_LINK_LIBRARIES(resolve_stack_dump mysys)
 
-  MYSQL_ADD_EXECUTABLE(mysql_waitpid mysql_waitpid.c COMPONENT Client)
-  TARGET_LINK_LIBRARIES(mysql_waitpid mysys)
+  MYSQL_ADD_EXECUTABLE(mariadb-waitpid mysql_waitpid.c COMPONENT Client)
+  TARGET_LINK_LIBRARIES(mariadb-waitpid mysys)
 
-  MYSQL_ADD_EXECUTABLE(mysqld_safe_helper mysqld_safe_helper.c COMPONENT Server)
-  TARGET_LINK_LIBRARIES(mysqld_safe_helper mysys)
+  MYSQL_ADD_EXECUTABLE(mariadbd-safe-helper mysqld_safe_helper.c COMPONENT Server)
+  TARGET_LINK_LIBRARIES(mariadbd-safe-helper mysys)
 ENDIF()
