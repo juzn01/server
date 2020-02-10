@@ -186,7 +186,7 @@ inline bool mtr_t::write(const buf_block_t &block, void *ptr, V val)
   }
   byte *p= static_cast<byte*>(ptr);
   const byte *const end= p + l;
-  if (w != FORCED)
+  if (w != FORCED && m_log_mode == MTR_LOG_ALL)
   {
     const byte *b= buf;
     while (*p++ == *b++)
@@ -478,7 +478,7 @@ inline void mtr_t::memcpy(const buf_block_t &b, void *dest, const void *str,
   ut_ad(ut_align_down(dest, srv_page_size) == b.frame);
   char *d= static_cast<char*>(dest);
   const char *s= static_cast<const char*>(str);
-  if (w != FORCED)
+  if (w != FORCED && m_log_mode == MTR_LOG_ALL)
   {
     ut_ad(len);
     const char *const end= d + len;
