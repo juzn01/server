@@ -786,18 +786,16 @@ page_cur_open_on_rnd_user_rec(
 
 /**
 Set the owned records field of the record pointed to by a directory slot.
-@tparam compressed  whether to update any ROW_FORMAT=COMPRESSED page as well
 @param[in,out]  block    file page
 @param[in]      slot     sparse directory slot
 @param[in,out]  n        number of records owned by the directory slot
 @param[in,out]  mtr      mini-transaction */
-template<bool compressed>
 static void page_dir_slot_set_n_owned(buf_block_t *block,
                                       const page_dir_slot_t *slot,
                                       ulint n, mtr_t *mtr)
 {
   rec_t *rec= const_cast<rec_t*>(page_dir_slot_get_rec(slot));
-  page_rec_set_n_owned<compressed>(block, rec, n, page_rec_is_comp(rec), mtr);
+  page_rec_set_n_owned<true>(block, rec, n, page_rec_is_comp(rec), mtr);
 }
 
 /**
@@ -905,10 +903,10 @@ static void page_dir_balance_slot(buf_block_t *block, ulint s, mtr_t *mtr)
 				    <= PAGE_DIR_SLOT_MAX_N_OWNED);
 		/* Merge the slots. */
 		ulint n_owned = page_dir_slot_get_n_owned(slot);
-		page_dir_slot_set_n_owned<true>(block, slot, 0, mtr);
-		page_dir_slot_set_n_owned<true>(block, up_slot, n_owned
-						+ page_dir_slot_get_n_owned(
-							up_slot), mtr);
+		page_dir_slot_set_n_owned(block, slot, 0, mtr);
+		page_dir_slot_set_n_owned(block, up_slot, n_owned
+					  + page_dir_slot_get_n_owned(up_slot),
+					  mtr);
 		/* Shift the slots */
 		page_dir_slot_t* last_slot = page_dir_get_nth_slot(
 			block->frame, n_slots - 1);
@@ -959,7 +957,7 @@ static void page_dir_balance_slot(buf_block_t *block, ulint s, mtr_t *mtr)
 
 	mtr->write<2>(*block, slot, page_offset(new_rec));
 func_exit:
-	page_dir_slot_set_n_owned<true>(block, up_slot, up_n_owned - 1, mtr);
+	page_dir_slot_set_n_owned(block, up_slot, up_n_owned - 1, mtr);
 }
 
 /** Allocate space for inserting an index record.
