@@ -38,7 +38,7 @@
   --sort-buffer-size=# 
   Each thread that needs to do a sort allocates a buffer of
 @@ -1095,6 +1102,7 @@
-  EMPTY_STRING_IS_NULL, SIMULTANEOUS_ASSIGNMENT
+  NO_ENGINE_SUBSTITUTION, PAD_CHAR_TO_FULL_LENGTH
   --stack-trace       Print a symbolic stack trace on failure
   (Defaults to on; use --skip-stack-trace to disable.)
 + --standalone        Dummy option to start as a standalone program (NT).
@@ -86,7 +86,7 @@
  net-retry-count 10
 @@ -1479,6 +1492,8 @@
  session-track-state-change FALSE
- session-track-system-variables autocommit,character_set_client,character_set_connection,character_set_results,time_zone
+ session-track-system-variables 
  session-track-transaction-info OFF
 +shared-memory FALSE
 +shared-memory-base-name MYSQL
@@ -102,9 +102,9 @@
  sql-mode STRICT_TRANS_TABLES,ERROR_FOR_DIVISION_BY_ZERO,NO_AUTO_CREATE_USER,NO_ENGINE_SUBSTITUTION
  stack-trace TRUE
 @@ -1516,14 +1532,16 @@
+ sync-relay-log 10000
  sync-relay-log-info 10000
  sysdate-is-now FALSE
- system-versioning-alter-history ERROR
 -table-cache 421
 +table-cache 2000
  table-definition-cache 400
@@ -113,9 +113,6 @@
 +table-open-cache 2000
 +table-open-cache-instances 8
  tc-heuristic-recover OFF
- tcp-keepalive-interval 0
- tcp-keepalive-time 0
-@@ -1663,6 +1679,8 @@
  thread-cache-size 151
  thread-pool-idle-timeout 60
  thread-pool-max-threads 65536
