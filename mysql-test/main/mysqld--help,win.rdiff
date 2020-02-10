@@ -114,7 +114,8 @@
 +table-open-cache-instances 8
  tc-heuristic-recover OFF
  tcp-keepalive-interval 0
-@@ -1663,6 +1679,8 @@ tcp-keepalive-time 0
+ tcp-keepalive-time 0
+@@ -1663,6 +1679,8 @@
  thread-cache-size 151
  thread-pool-idle-timeout 60
  thread-pool-max-threads 65536
