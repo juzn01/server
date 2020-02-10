@@ -2015,6 +2015,7 @@ static int binlog_prepare(handlerton *hton, THD *thd, bool all)
     !is_preparing_xa(thd) ? 0 : binlog_commit(NULL, thd, all);
 }
 
+
 static int binlog_xa_recover_dummy(handlerton *hton __attribute__((unused)),
                              XID *xid_list __attribute__((unused)),
                              uint len __attribute__((unused)))
@@ -2023,24 +2024,6 @@ static int binlog_xa_recover_dummy(handlerton *hton __attribute__((unused)),
   return 0;
 }
 
-
-inline int binlog_write_by_xid(THD *thd, XID *xid, char *buf,
-                               const char *query, size_t q_len)
-{
-  int res= 0;
-
-  if ((WSREP_EMULATE_BINLOG(thd) || mysql_bin_log.is_open()) &&
-      thd->transaction.xid_state.is_binlogged())
-  {
-    size_t buflen= serialize_with_xid(xid, buf, query, q_len);
-    res= thd->binlog_query(THD::THD::STMT_QUERY_TYPE, buf, buflen,
-                           FALSE, TRUE, TRUE, 0);
-
-    DBUG_ASSERT(!res || thd->is_error());
-  }
-
-  return res;
-}
 
 static int binlog_commit_by_xid(handlerton *hton, XID *xid)
 {

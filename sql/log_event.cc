@@ -2588,7 +2588,7 @@ Gtid_log_event::Gtid_log_event(const char *buf, uint event_len,
     uint32 temp= 0;
 
     memcpy(&temp, buf, sizeof(temp));
-    xid.formatID= le32toh(temp);
+    xid.formatID= uint4korr(&temp);
     buf += sizeof(temp);
 
     xid.gtrid_length= (long) buf[0];
@@ -2808,13 +2808,13 @@ XA_prepare_log_event(const char* buf,
   one_phase= (bool) temp_byte;
   buf += sizeof(temp_byte);
   memcpy(&temp, buf, sizeof(temp));
-  m_xid.formatID= le32toh(temp);
+  m_xid.formatID= uint4korr(&temp);
   buf += sizeof(temp);
   memcpy(&temp, buf, sizeof(temp));
-  m_xid.gtrid_length= le32toh(temp);
+  m_xid.gtrid_length= uint4korr(&temp);
   buf += sizeof(temp);
   memcpy(&temp, buf, sizeof(temp));
-  m_xid.bqual_length= le32toh(temp);
+  m_xid.bqual_length= uint4korr(&temp);
   buf += sizeof(temp);
   memcpy(m_xid.data, buf, m_xid.gtrid_length + m_xid.bqual_length);
 
