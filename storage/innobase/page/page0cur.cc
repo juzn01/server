@@ -784,58 +784,6 @@ page_cur_open_on_rnd_user_rec(
 				       ut_rnd_interval(n_recs) + 1);
 }
 
-/** Reset PAGE_DIRECTION and PAGE_N_DIRECTION.
-@tparam compressed  whether the page is in ROW_FORMAT=COMPRESSED
-@param[in,out]  block   index page
-@param[in,out]  ptr     the PAGE_DIRECTION_B field
-@param[in,out]  mtr     mini-transaction */
-template<bool compressed=false>
-inline void page_direction_reset(buf_block_t *block, byte *ptr, mtr_t *mtr)
-{
-  ut_ad(!block->page.zip.data || page_is_comp(block->frame));
-  ut_ad(!compressed || block->page.zip.data);
-  ut_ad(ptr == PAGE_HEADER + PAGE_DIRECTION_B + block->frame);
-  static_assert(PAGE_DIRECTION_B + 1 == PAGE_N_DIRECTION, "adjacent fields");
-
-  if (!compressed)
-    mtr->write<1,mtr_t::OPT>(*block, ptr, (*ptr & ~((1U << 3) - 1))
-                            | PAGE_NO_DIRECTION);
-  else if (mtr->write<1,mtr_t::OPT>(*block, ptr, PAGE_NO_DIRECTION))
-    block->page.zip.data[PAGE_HEADER + PAGE_DIRECTION_B]= PAGE_NO_DIRECTION;
-
-  byte *n_direction= my_assume_aligned<2>(ptr + 1);
-  if (mtr->write<2,mtr_t::OPT>(*block, n_direction, 0U) && compressed)
-    memset_aligned<2>(&block->page.zip.data[PAGE_HEADER + PAGE_N_DIRECTION],
-                      0, 2);
-}
-
-/** Increment PAGE_N_DIRECTION.
-@tparam compressed  whether the page is in ROW_FORMAT=COMPRESSED
-@param[in,out]  block   index page
-@param[in,out]  ptr     the PAGE_DIRECTION_B field
-@param[in]      dir     PAGE_RIGHT or PAGE_LEFT
-@param[in,out]  mtr     mini-transaction */
-template<bool compressed=false>
-inline void page_direction_increment(buf_block_t *block, byte *ptr, uint dir,
-                                     mtr_t *mtr)
-{
-  ut_ad(!block->page.zip.data || page_is_comp(block->frame));
-  ut_ad(!compressed || block->page.zip.data);
-  ut_ad(ptr == PAGE_HEADER + PAGE_DIRECTION_B + block->frame);
-  ut_ad(dir == PAGE_RIGHT || dir == PAGE_LEFT);
-
-  if (!compressed)
-    mtr->write<1,mtr_t::OPT>(*block, ptr, (*ptr & ~((1U << 3) - 1)) | dir);
-  else if (mtr->write<1,mtr_t::OPT>(*block, ptr, dir))
-    block->page.zip.data[PAGE_HEADER + PAGE_DIRECTION_B]= dir;
-
-  byte *n_direction= my_assume_aligned<2>(ptr + 1);
-  mtr->write<2>(*block, n_direction, 1U + mach_read_from_2(n_direction));
-  if (compressed)
-    memcpy_aligned<2>(&block->page.zip.data[PAGE_HEADER + PAGE_N_DIRECTION],
-                      n_direction, 2);
-}
-
 /**
 Set the owned records field of the record pointed to by a directory slot.
 @tparam compressed  whether to update any ROW_FORMAT=COMPRESSED page as well
@@ -1199,12 +1147,13 @@ no_direction:
     else if (last_insert == cur->rec && (*dir & ((1U << 3) - 1)) != PAGE_LEFT)
     {
       *dir= (*dir & ~((1U << 3) - 1)) | PAGE_RIGHT;
+inc_dir:
       mach_write_to_2(n, mach_read_from_2(n) + 1);
     }
     else if (next_rec == last_insert && (*dir & ((1U << 3) - 1)) != PAGE_RIGHT)
     {
       *dir= (*dir & ~((1U << 3) - 1)) | PAGE_LEFT;
-      mach_write_to_2(n, mach_read_from_2(n) + 1);
+      goto inc_dir;
     }
     else
       goto no_direction;
@@ -1394,384 +1343,346 @@ page_cur_insert_rec_zip(
 	offset_t*	offsets,/*!< in/out: rec_get_offsets(rec, index) */
 	mtr_t*		mtr)	/*!< in/out: mini-transaction */
 {
-	byte*		insert_buf;
-	ulint		rec_size;
-	page_t*		page;		/*!< the relevant page */
-	rec_t*		insert_rec;	/*!< inserted record */
-	ulint		heap_no;	/*!< heap number of the inserted
-					record */
-	page_zip_des_t*	page_zip;
+  page_zip_des_t * const page_zip= page_cur_get_page_zip(cursor);
+  ut_ad(page_zip);
+  ut_ad(rec_offs_validate(rec, index, offsets));
 
-	page_zip = page_cur_get_page_zip(cursor);
-	ut_ad(page_zip);
-	ut_ad(rec_offs_validate(rec, index, offsets));
-
-	page = page_cur_get_page(cursor);
-	ut_ad(dict_table_is_comp(index->table));
-	ut_ad(page_is_comp(page));
-	ut_ad(fil_page_index_page_check(page));
-	ut_ad(mach_read_from_8(page + PAGE_HEADER + PAGE_INDEX_ID) == index->id
-	      || mtr->is_inside_ibuf());
-	ut_ad(!page_get_instant(page));
-	ut_ad(!page_cur_is_after_last(cursor));
+  ut_ad(index->table->not_redundant());
+  ut_ad(page_is_comp(cursor->block->frame));
+  ut_ad(rec_offs_comp(offsets));
+  ut_ad(fil_page_get_type(cursor->block->frame) == FIL_PAGE_INDEX ||
+        fil_page_get_type(cursor->block->frame) == FIL_PAGE_RTREE);
+  ut_ad(mach_read_from_8(PAGE_HEADER + PAGE_INDEX_ID + cursor->block->frame) ==
+        index->id || mtr->is_inside_ibuf());
+  ut_ad(!page_get_instant(cursor->block->frame));
+  ut_ad(!page_cur_is_after_last(cursor));
 #ifdef UNIV_ZIP_DEBUG
-	ut_a(page_zip_validate(page_zip, page, index));
+  ut_a(page_zip_validate(page_zip, cursor->block->frame, index));
 #endif /* UNIV_ZIP_DEBUG */
 
-	/* 1. Get the size of the physical record in the page */
-	rec_size = rec_offs_size(offsets);
+  /* 1. Get the size of the physical record in the page */
+  const ulint rec_size= rec_offs_size(offsets);
 
 #ifdef UNIV_DEBUG_VALGRIND
-	{
-		const void*	rec_start
-			= rec - rec_offs_extra_size(offsets);
-		ulint		extra_size
-			= rec_offs_extra_size(offsets)
-			- (rec_offs_comp(offsets)
-			   ? REC_N_NEW_EXTRA_BYTES
-			   : REC_N_OLD_EXTRA_BYTES);
-
-		/* All data bytes of the record must be valid. */
-		UNIV_MEM_ASSERT_RW(rec, rec_offs_data_size(offsets));
-		/* The variable-length header must be valid. */
-		UNIV_MEM_ASSERT_RW(rec_start, extra_size);
-	}
+  {
+    const void *rec_start= rec - rec_offs_extra_size(offsets);
+    ulint extra_size= rec_offs_extra_size(offsets) - REC_N_NEW_EXTRA_BYTES;
+    /* All data bytes of the record must be valid. */
+    UNIV_MEM_ASSERT_RW(rec, rec_offs_data_size(offsets));
+    /* The variable-length header must be valid. */
+    UNIV_MEM_ASSERT_RW(rec_start, extra_size);
+  }
 #endif /* UNIV_DEBUG_VALGRIND */
+  const bool reorg_before_insert= page_has_garbage(cursor->block->frame) &&
+    rec_size > page_get_max_insert_size(cursor->block->frame, 1) &&
+    rec_size <= page_get_max_insert_size_after_reorganize(cursor->block->frame,
+                                                          1);
+  constexpr uint16_t page_free_f= PAGE_FREE + PAGE_HEADER;
+  byte* const page_free = my_assume_aligned<4>(page_free_f +
+                                               cursor->block->frame);
+  uint16_t free_rec= 0;
 
-	const bool reorg_before_insert = page_has_garbage(page)
-		&& rec_size > page_get_max_insert_size(page, 1)
-		&& rec_size <= page_get_max_insert_size_after_reorganize(
-			page, 1);
-	constexpr uint16_t page_free_f = PAGE_FREE + PAGE_HEADER;
-	byte* const page_free = my_assume_aligned<4>(page_free_f + page);
-	uint16_t free_rec;
+  /* 2. Try to find suitable space from page memory management */
+  ulint heap_no;
+  byte *insert_buf;
 
-	/* 2. Try to find suitable space from page memory management */
-	if (!page_zip_available(page_zip, dict_index_is_clust(index),
-				rec_size, 1)
-	    || reorg_before_insert) {
-		/* The values can change dynamically. */
-		ulint	level		= page_zip_level;
+  if (reorg_before_insert ||
+      !page_zip_available(page_zip, index->is_clust(), rec_size, 1))
+  {
+    /* SET GLOBAL might be executed concurrently. Sample the value once. */
+    ulint level= page_zip_level;
 #ifdef UNIV_DEBUG
-		rec_t*	cursor_rec	= page_cur_get_rec(cursor);
+    const rec_t * const cursor_rec= page_cur_get_rec(cursor);
 #endif /* UNIV_DEBUG */
 
-		if (page_is_empty(page)) {
-			ut_ad(page_cur_is_before_first(cursor));
+    if (page_is_empty(cursor->block->frame))
+    {
+      ut_ad(page_cur_is_before_first(cursor));
 
-			/* This is an empty page. Recreate it to
-			get rid of the modification log. */
-			page_create_zip(page_cur_get_block(cursor), index,
-					page_header_get_field(page, PAGE_LEVEL),
-					0, mtr);
-			ut_ad(!page_header_get_ptr(page, PAGE_FREE));
+      /* This is an empty page. Recreate to remove the modification log. */
+      page_create_zip(cursor->block, index,
+                      page_header_get_field(cursor->block->frame, PAGE_LEVEL),
+                      0, mtr);
+      ut_ad(!page_header_get_ptr(cursor->block->frame, PAGE_FREE));
 
-			if (page_zip_available(
-				    page_zip, dict_index_is_clust(index),
-				    rec_size, 1)) {
-				free_rec = 0;
-				goto use_heap;
-			}
+      if (page_zip_available(page_zip, index->is_clust(), rec_size, 1))
+        goto use_heap;
 
-			/* The cursor should remain on the page infimum. */
-			return(NULL);
-		} else if (!page_zip->m_nonempty && !page_has_garbage(page)) {
-			/* The page has been freshly compressed, so
-			reorganizing it will not help. */
-		} else {
-			ulint pos = page_rec_get_n_recs_before(cursor->rec);
+      /* The cursor should remain on the page infimum. */
+      return nullptr;
+    }
 
-			if (!page_zip_reorganize(page_cur_get_block(cursor),
-						 index, level, mtr, true)) {
-				ut_ad(cursor->rec == cursor_rec);
-				return NULL;
-			}
+    if (page_zip->m_nonempty || page_has_garbage(cursor->block->frame))
+    {
+      ulint pos= page_rec_get_n_recs_before(cursor->rec);
 
-			if (pos) {
-				cursor->rec = page_rec_get_nth(page, pos);
-			} else {
-				ut_ad(cursor->rec == page_get_infimum_rec(
-					      page));
-			}
+      if (!page_zip_reorganize(cursor->block, index, level, mtr, true))
+      {
+        ut_ad(cursor->rec == cursor_rec);
+        return nullptr;
+      }
 
-			ut_ad(!page_header_get_ptr(page, PAGE_FREE));
+      if (pos)
+        cursor->rec= page_rec_get_nth(cursor->block->frame, pos);
+      else
+        ut_ad(cursor->rec == page_get_infimum_rec(cursor->block->frame));
 
-			if (page_zip_available(
-				    page_zip, dict_index_is_clust(index),
-				    rec_size, 1)) {
-				/* After reorganizing, there is space
-				available. */
-				free_rec = 0;
-				goto use_heap;
-			}
-		}
+      ut_ad(!page_header_get_ptr(cursor->block->frame, PAGE_FREE));
 
-		/* Try compressing the whole page afterwards. */
-		const mtr_log_t log_mode = mtr->set_log_mode(MTR_LOG_NONE);
-		insert_rec = page_cur_insert_rec_low(
-			cursor, index, rec, offsets, mtr);
-		mtr->set_log_mode(log_mode);
+      if (page_zip_available(page_zip, index->is_clust(), rec_size, 1))
+        goto use_heap;
+    }
 
-		if (insert_rec == NULL) {
-			/* Out of space. */
-		} else {
-			ulint	pos = page_rec_get_n_recs_before(insert_rec);
-			ut_ad(pos > 0);
+    /* Try compressing the whole page afterwards. */
+    const mtr_log_t log_mode= mtr->set_log_mode(MTR_LOG_NONE);
+    rec_t *insert_rec= page_cur_insert_rec_low(cursor, index, rec, offsets,
+                                               mtr);
+    mtr->set_log_mode(log_mode);
 
-			/* We are writing entire page images to the
-			log.  Reduce the redo log volume by
-			reorganizing the page at the same time. */
-			if (page_zip_reorganize(cursor->block, index,
-						level, mtr)) {
-				/* The page was reorganized: Seek to pos. */
-				if (pos > 1) {
-					cursor->rec = page_rec_get_nth(
-						page, pos - 1);
-				} else {
-					cursor->rec = page + PAGE_NEW_INFIMUM;
-				}
+    if (insert_rec)
+    {
+      ulint pos= page_rec_get_n_recs_before(insert_rec);
+      ut_ad(pos > 0);
 
-				insert_rec = page + rec_get_next_offs(
-					cursor->rec, TRUE);
-				rec_offs_make_valid(
-					insert_rec, index,
-					page_is_leaf(page), offsets);
-				return insert_rec;
-			}
+      /* We are writing entire page images to the log.  Reduce the redo
+      log volume by reorganizing the page at the same time. */
+      if (page_zip_reorganize(cursor->block, index, level, mtr))
+      {
+        /* The page was reorganized: Seek to pos. */
+        cursor->rec= pos > 1
+          ? page_rec_get_nth(cursor->block->frame, pos - 1)
+          : cursor->block->frame + PAGE_NEW_INFIMUM;
+        insert_rec= cursor->block->frame + rec_get_next_offs(cursor->rec, 1);
+        rec_offs_make_valid(insert_rec, index,
+                            page_is_leaf(cursor->block->frame), offsets);
+        return insert_rec;
+      }
 
-			/* Theoretically, we could try one last resort
-			of btr_page_reorganize_low() followed by
-			page_zip_available(), but that would be very
-			unlikely to succeed. (If the full reorganized
-			page failed to compress, why would it succeed
-			to compress the page, plus log the insert of
-			this record?) */
+      /* Theoretically, we could try one last resort of
+      page_zip_reorganize() followed by page_zip_available(), but that
+      would be very unlikely to succeed. (If the full reorganized page
+      failed to compress, why would it succeed to compress the page,
+      plus log the insert of this record?) */
 
-			/* Out of space: restore the page */
-			if (!page_zip_decompress(page_zip, page, FALSE)) {
-				ut_error; /* Memory corrupted? */
-			}
-			ut_ad(page_validate(page, index));
-			insert_rec = NULL;
-		}
+      /* Out of space: restore the page */
+      if (!page_zip_decompress(page_zip, cursor->block->frame, false))
+        ut_error; /* Memory corrupted? */
+      ut_ad(page_validate(cursor->block->frame, index));
+      insert_rec= nullptr;
+    }
+    return insert_rec;
+  }
 
-		return(insert_rec);
-	}
+  free_rec= mach_read_from_2(page_free);
+  if (free_rec)
+  {
+    /* Try to allocate from the head of the free list. */
+    offset_t foffsets_[REC_OFFS_NORMAL_SIZE];
+    mem_heap_t *heap= nullptr;
 
-	free_rec = mach_read_from_2(page_free);
-	if (free_rec) {
-		/* Try to allocate from the head of the free list. */
-		lint	extra_size_diff;
-		offset_t	foffsets_[REC_OFFS_NORMAL_SIZE];
-		offset_t*	foffsets	= foffsets_;
-		mem_heap_t*	heap		= NULL;
+    rec_offs_init(foffsets_);
 
-		rec_offs_init(foffsets_);
+    offset_t *foffsets= rec_get_offsets(cursor->block->frame + free_rec, index,
+                                        foffsets_,
+                                        page_is_leaf(cursor->block->frame),
+                                        ULINT_UNDEFINED, &heap);
+    insert_buf= cursor->block->frame + free_rec -
+      rec_offs_extra_size(foffsets);
 
-		foffsets = rec_get_offsets(page + free_rec, index, foffsets,
-					   page_is_leaf(page),
-					   ULINT_UNDEFINED, &heap);
-		if (rec_offs_size(foffsets) < rec_size) {
+    if (rec_offs_size(foffsets) < rec_size)
+    {
 too_small:
-			if (UNIV_LIKELY_NULL(heap)) {
-				mem_heap_free(heap);
-			}
+      if (UNIV_LIKELY_NULL(heap))
+        mem_heap_free(heap);
+      free_rec= 0;
+      goto use_heap;
+    }
 
-			free_rec = 0;
-			goto use_heap;
-		}
+    /* On compressed pages, do not relocate records from
+    the free list. If extra_size would grow, use the heap. */
+    const ssize_t extra_size_diff= lint(rec_offs_extra_size(offsets) -
+                                        rec_offs_extra_size(foffsets));
 
-		insert_buf = page + free_rec - rec_offs_extra_size(foffsets);
+    if (UNIV_UNLIKELY(extra_size_diff < 0))
+    {
+      /* Add an offset to the extra_size. */
+      if (rec_offs_size(foffsets) < rec_size - ssize_t(extra_size_diff))
+        goto too_small;
 
-		/* On compressed pages, do not relocate records from
-		the free list.  If extra_size would grow, use the heap. */
-		extra_size_diff = lint(rec_offs_extra_size(offsets)
-				       - rec_offs_extra_size(foffsets));
+      insert_buf-= extra_size_diff;
+    }
+    else if (UNIV_UNLIKELY(extra_size_diff))
+      /* Do not allow extra_size to grow */
+      goto too_small;
 
-		if (UNIV_UNLIKELY(extra_size_diff < 0)) {
-			/* Add an offset to the extra_size. */
-			if (rec_offs_size(foffsets)
-			    < rec_size - ulint(extra_size_diff)) {
+    byte *const free_rec_ptr= cursor->block->frame + free_rec;
+    heap_no= rec_get_heap_no_new(free_rec_ptr);
+    int16_t next_rec= mach_read_from_2(free_rec_ptr - REC_NEXT);
+    /* With innodb_page_size=64k, int16_t would be unsafe to use here,
+    but that cannot be used with ROW_FORMAT=COMPRESSED. */
+    static_assert(UNIV_ZIP_SIZE_SHIFT_MAX == 14, "compatibility");
+    if (next_rec)
+    {
+      next_rec+= free_rec;
+      ut_ad(int{PAGE_NEW_SUPREMUM_END + REC_N_NEW_EXTRA_BYTES} <= next_rec);
+      ut_ad(static_cast<uint16_t>(next_rec) < srv_page_size);
+    }
 
-				goto too_small;
-			}
+    byte *hdr= my_assume_aligned<4>(&page_zip->data[page_free_f]);
+    mach_write_to_2(hdr, static_cast<uint16_t>(next_rec));
+    const byte *const garbage= my_assume_aligned<2>(page_free + 2);
+    ut_ad(mach_read_from_2(garbage) >= rec_size);
+    mach_write_to_2(my_assume_aligned<2>(hdr + 2),
+                    mach_read_from_2(garbage) - rec_size);
+    static_assert(PAGE_GARBAGE == PAGE_FREE + 2, "compatibility");
+    mtr->memcpy(*cursor->block, page_free, hdr, 4);
 
-			insert_buf -= extra_size_diff;
-		} else if (UNIV_UNLIKELY(extra_size_diff)) {
-			/* Do not allow extra_size to grow */
+    if (!page_is_leaf(cursor->block->frame))
+    {
+      /* Zero out the node pointer of free_rec, in case it will not be
+      overwritten by insert_rec. */
+      ut_ad(rec_size > REC_NODE_PTR_SIZE);
 
-			goto too_small;
-		}
+      if (rec_offs_size(foffsets) > rec_size)
+        memset(rec_get_end(free_rec_ptr, foffsets) -
+               REC_NODE_PTR_SIZE, 0, REC_NODE_PTR_SIZE);
+    }
+    else if (index->is_clust())
+    {
+      /* Zero out DB_TRX_ID,DB_ROLL_PTR in free_rec, in case they will
+      not be overwritten by insert_rec. */
 
-		heap_no = rec_get_heap_no_new(page + free_rec);
-		int16_t next_rec = mach_read_from_2(page + free_rec - REC_NEXT);
-		/* We assume that int16_t is safe to use here.
-		With innodb_page_size=64k it would be unsafe,
-		but that cannot be used with ROW_FORMAT=COMPRESSED. */
-		static_assert(UNIV_ZIP_SIZE_SHIFT_MAX == 14, "compatibility");
-		if (next_rec) {
-			next_rec += free_rec;
-			ut_ad(int{PAGE_NEW_SUPREMUM_END + REC_N_NEW_EXTRA_BYTES}
-			      <= next_rec);
-			ut_ad(static_cast<uint16_t>(next_rec) < srv_page_size);
-		}
-		mtr->write<2>(*cursor->block, page_free,
-			      static_cast<uint16_t>(next_rec));
-		byte* garbage = my_assume_aligned<2>(page_free + 2);
-		ut_ad(mach_read_from_2(garbage) >= rec_size);
-		mtr->write<2>(*cursor->block, garbage,
-			      mach_read_from_2(garbage) - rec_size);
-		compile_time_assert(PAGE_GARBAGE == PAGE_FREE + 2);
-		compile_time_assert(!((PAGE_HEADER + PAGE_FREE) % 4));
-		memcpy_aligned<4>(&page_zip->data[page_free_f], page_free, 4);
-		/* TODO: group with PAGE_LAST_INSERT */
+      ulint len;
+      ulint trx_id_offs= rec_get_nth_field_offs(foffsets, index->db_trx_id(),
+                                                &len);
+      ut_ad(len == DATA_TRX_ID_LEN);
 
-		if (!page_is_leaf(page)) {
-			/* Zero out the node pointer of free_rec,
-			in case it will not be overwritten by
-			insert_rec. */
+      if (DATA_TRX_ID_LEN + DATA_ROLL_PTR_LEN + trx_id_offs +
+          rec_offs_extra_size(foffsets) > rec_size)
+        memset(free_rec_ptr + trx_id_offs, 0,
+               DATA_TRX_ID_LEN + DATA_ROLL_PTR_LEN);
 
-			ut_ad(rec_size > REC_NODE_PTR_SIZE);
+      ut_ad(free_rec_ptr + trx_id_offs + DATA_TRX_ID_LEN ==
+            rec_get_nth_field(free_rec_ptr, foffsets, index->db_roll_ptr(),
+                              &len));
+      ut_ad(len == DATA_ROLL_PTR_LEN);
+    }
 
-			if (rec_offs_extra_size(foffsets)
-			    + rec_offs_data_size(foffsets) > rec_size) {
-
-				memset(rec_get_end(page + free_rec, foffsets)
-				       - REC_NODE_PTR_SIZE, 0,
-				       REC_NODE_PTR_SIZE);
-			}
-		} else if (dict_index_is_clust(index)) {
-			/* Zero out the DB_TRX_ID and DB_ROLL_PTR
-			columns of free_rec, in case it will not be
-			overwritten by insert_rec. */
-
-			ulint	trx_id_offs;
-			ulint	len;
-
-			trx_id_offs = rec_get_nth_field_offs(
-				foffsets, index->db_trx_id(), &len);
-			ut_ad(len == DATA_TRX_ID_LEN);
-
-			if (DATA_TRX_ID_LEN + DATA_ROLL_PTR_LEN + trx_id_offs
-			    + rec_offs_extra_size(foffsets) > rec_size) {
-				/* We will have to zero out the
-				DB_TRX_ID and DB_ROLL_PTR, because
-				they will not be fully overwritten by
-				insert_rec. */
-
-				memset(page + free_rec + trx_id_offs, 0,
-				       DATA_TRX_ID_LEN + DATA_ROLL_PTR_LEN);
-			}
-
-			ut_ad(free_rec + trx_id_offs + DATA_TRX_ID_LEN
-			      == rec_get_nth_field(free_rec, foffsets,
-						   index->db_roll_ptr(), &len));
-			ut_ad(len == DATA_ROLL_PTR_LEN);
-		}
-
-		if (UNIV_LIKELY_NULL(heap)) {
-			mem_heap_free(heap);
-		}
-	} else {
+    if (UNIV_LIKELY_NULL(heap))
+      mem_heap_free(heap);
+  }
+  else
+  {
 use_heap:
-		ut_ad(!free_rec);
-		insert_buf = page_mem_alloc_heap<true>(cursor->block, rec_size,
-						       &heap_no, mtr);
+    ut_ad(!free_rec);
+    insert_buf = page_mem_alloc_heap<true>(cursor->block, rec_size, &heap_no,
+                                           mtr);
 
-		if (UNIV_UNLIKELY(insert_buf == NULL)) {
-			return(NULL);
-		}
+    if (UNIV_UNLIKELY(!insert_buf))
+      return insert_buf;
 
-		page_zip_dir_add_slot(cursor->block, index, mtr);
-	}
+    page_zip_dir_add_slot(cursor->block, index, mtr);
+  }
 
-	/* 3. Create the record */
-	insert_rec = rec_copy(insert_buf, rec, offsets);
-	rec_offs_make_valid(insert_rec, index, page_is_leaf(page), offsets);
+  /* 3. Create the record */
+  byte *insert_rec= rec_copy(insert_buf, rec, offsets);
+  rec_offs_make_valid(insert_rec, index, page_is_leaf(cursor->block->frame),
+                      offsets);
 
-	/* 4. Insert the record in the linked list of records */
-	ut_ad(cursor->rec != insert_rec);
+  /* 4. Insert the record in the linked list of records */
+  ut_ad(cursor->rec != insert_rec);
 
-	/* next record after current before the insertion */
-	const rec_t* next_rec = page_rec_get_next_low(cursor->rec, TRUE);
-	ut_ad(rec_get_status(cursor->rec) <= REC_STATUS_INFIMUM);
-	ut_ad(rec_get_status(insert_rec) < REC_STATUS_INFIMUM);
-	ut_ad(rec_get_status(next_rec) != REC_STATUS_INFIMUM);
+  /* next record after current before the insertion */
+  const rec_t* next_rec = page_rec_get_next_low(cursor->rec, TRUE);
+  ut_ad(rec_get_status(cursor->rec) <= REC_STATUS_INFIMUM);
+  ut_ad(rec_get_status(insert_rec) < REC_STATUS_INFIMUM);
+  ut_ad(rec_get_status(next_rec) != REC_STATUS_INFIMUM);
 
-	mach_write_to_2(insert_rec - REC_NEXT, static_cast<uint16_t>
-			(next_rec - insert_rec));
-	mach_write_to_2(cursor->rec - REC_NEXT, static_cast<uint16_t>
-			(insert_rec - cursor->rec));
-	byte* n_recs = my_assume_aligned<2>(PAGE_N_RECS + PAGE_HEADER + page);
-	mtr->write<2>(*cursor->block, n_recs, 1U + mach_read_from_2(n_recs));
-	memcpy_aligned<2>(&page_zip->data[PAGE_N_RECS + PAGE_HEADER], n_recs,
-			  2);
+  mach_write_to_2(insert_rec - REC_NEXT, static_cast<uint16_t>
+                  (next_rec - insert_rec));
+  mach_write_to_2(cursor->rec - REC_NEXT, static_cast<uint16_t>
+                  (insert_rec - cursor->rec));
+  byte *n_recs= my_assume_aligned<2>(PAGE_N_RECS + PAGE_HEADER +
+                                     cursor->block->frame);
+  mtr->write<2>(*cursor->block, n_recs, 1U + mach_read_from_2(n_recs));
+  memcpy_aligned<2>(&page_zip->data[PAGE_N_RECS + PAGE_HEADER], n_recs, 2);
 
-	/* 5. Set the n_owned field in the inserted record to zero,
-	and set the heap_no field */
-	rec_set_bit_field_1(insert_rec, 0, REC_NEW_N_OWNED,
-			    REC_N_OWNED_MASK, REC_N_OWNED_SHIFT);
-	rec_set_bit_field_2(insert_rec, heap_no, REC_NEW_HEAP_NO,
-			    REC_HEAP_NO_MASK, REC_HEAP_NO_SHIFT);
+  /* 5. Set the n_owned field in the inserted record to zero,
+  and set the heap_no field */
+  rec_set_bit_field_1(insert_rec, 0, REC_NEW_N_OWNED,
+                      REC_N_OWNED_MASK, REC_N_OWNED_SHIFT);
+  rec_set_bit_field_2(insert_rec, heap_no, REC_NEW_HEAP_NO,
+                      REC_HEAP_NO_MASK, REC_HEAP_NO_SHIFT);
 
-	UNIV_MEM_ASSERT_RW(rec_get_start(insert_rec, offsets),
-			   rec_offs_size(offsets));
+  UNIV_MEM_ASSERT_RW(rec_get_start(insert_rec, offsets),
+                     rec_offs_size(offsets));
 
-	page_zip_dir_insert(cursor, free_rec, insert_rec, mtr);
+  /* 6. Update the last insertion info in page header */
+  byte *last_insert= my_assume_aligned<4>(PAGE_LAST_INSERT + PAGE_HEADER +
+                                          page_zip->data);
+  const uint16_t last_insert_rec= mach_read_from_2(last_insert);
+  ut_ad(!last_insert_rec ||
+        rec_get_node_ptr_flag(cursor->block->frame + last_insert_rec) ==
+        rec_get_node_ptr_flag(insert_rec));
+  mach_write_to_2(last_insert, page_offset(insert_rec));
 
-	/* 6. Update the last insertion info in page header */
-	byte* last_insert = my_assume_aligned<4>(PAGE_LAST_INSERT + PAGE_HEADER
-						 + page);
-	const uint16_t last_insert_rec = mach_read_from_2(last_insert);
-	ut_ad(!last_insert_rec
-	      || rec_get_node_ptr_flag(page + last_insert_rec)
-	      == rec_get_node_ptr_flag(insert_rec));
-	/* FIXME: combine with PAGE_DIRECTION changes */
-	mtr->write<2>(*cursor->block, last_insert, page_offset(insert_rec));
-	memcpy_aligned<4>(&page_zip->data[PAGE_LAST_INSERT + PAGE_HEADER],
-			  last_insert, 2);
-
-	if (!index->is_spatial()) {
-		byte* ptr = PAGE_HEADER + PAGE_DIRECTION_B + page;
-		if (UNIV_UNLIKELY(!last_insert_rec)) {
+  if (!index->is_spatial())
+  {
+    byte *dir= &page_zip->data[PAGE_HEADER + PAGE_DIRECTION_B];
+    ut_ad(!(*dir & ~((1U << 3) - 1)));
+    byte *n= my_assume_aligned<2>
+      (&page_zip->data[PAGE_HEADER + PAGE_N_DIRECTION]);
+    if (UNIV_UNLIKELY(!last_insert_rec))
+    {
 no_direction:
-			page_direction_reset<true>(cursor->block, ptr, mtr);
-		} else if (page + last_insert_rec == cursor->rec
-			   && page_ptr_get_direction(ptr) != PAGE_LEFT) {
-			page_direction_increment<true>(cursor->block, ptr,
-						       PAGE_RIGHT, mtr);
-		} else if (page_ptr_get_direction(ptr) != PAGE_RIGHT
-			   && page_rec_get_next(insert_rec)
-			   == page + last_insert_rec) {
-			page_direction_increment<true>(cursor->block, ptr,
-						       PAGE_LEFT, mtr);
-		} else {
-			goto no_direction;
-		}
-	}
+      *dir= PAGE_NO_DIRECTION;
+      memset(n, 0, 2);
+    }
+    else if (*dir != PAGE_LEFT &&
+             cursor->block->frame + last_insert_rec == cursor->rec)
+    {
+      *dir= PAGE_RIGHT;
+inc_dir:
+      mach_write_to_2(n, mach_read_from_2(n) + 1);
+    }
+    else if (*dir != PAGE_RIGHT && page_rec_get_next(insert_rec) ==
+             cursor->block->frame + last_insert_rec)
+    {
+      *dir= PAGE_LEFT;
+      goto inc_dir;
+    }
+    else
+      goto no_direction;
+  }
 
-	/* 7. It remains to update the owner record. */
-	ulint	n_owned;
+  /* Write the header fields in one record. */
+  mtr->memcpy(*cursor->block,
+              my_assume_aligned<8>(PAGE_LAST_INSERT + PAGE_HEADER +
+                                   cursor->block->frame),
+              my_assume_aligned<8>(PAGE_LAST_INSERT + PAGE_HEADER +
+                                   page_zip->data),
+	      PAGE_N_RECS - PAGE_LAST_INSERT + 2);
 
-	while (!(n_owned = rec_get_n_owned_new(next_rec))) {
-		next_rec = page_rec_get_next_low(next_rec, true);
-	}
+  /* 7. It remains to update the owner record. */
+  ulint n_owned;
 
-	rec_set_bit_field_1(const_cast<rec_t*>(next_rec), n_owned + 1,
-			    REC_NEW_N_OWNED,
-			    REC_N_OWNED_MASK, REC_N_OWNED_SHIFT);
+  while (!(n_owned = rec_get_n_owned_new(next_rec)))
+    next_rec = page_rec_get_next_low(next_rec, true);
 
-	/* 8. Now we have incremented the n_owned field of the owner
-	record. If the number exceeds PAGE_DIR_SLOT_MAX_N_OWNED,
-	we have to split the corresponding directory slot in two. */
-	if (UNIV_UNLIKELY(n_owned == PAGE_DIR_SLOT_MAX_N_OWNED)) {
-		page_dir_split_slot<true>(page_cur_get_block(cursor),
-					  page_dir_find_owner_slot(next_rec),
-					  mtr);
-	}
+  rec_set_bit_field_1(const_cast<rec_t*>(next_rec), n_owned + 1,
+                      REC_NEW_N_OWNED, REC_N_OWNED_MASK, REC_N_OWNED_SHIFT);
 
-	page_zip_write_rec(cursor->block, insert_rec, index, offsets, 1, mtr);
-	return insert_rec;
+  page_zip_dir_insert(cursor, free_rec, insert_rec, mtr);
+
+  /* 8. Now we have incremented the n_owned field of the owner
+  record. If the number exceeds PAGE_DIR_SLOT_MAX_N_OWNED,
+  we have to split the corresponding directory slot in two. */
+  if (UNIV_UNLIKELY(n_owned == PAGE_DIR_SLOT_MAX_N_OWNED))
+    page_dir_split_slot<true>(cursor->block,
+                              page_dir_find_owner_slot(next_rec), mtr);
+
+  page_zip_write_rec(cursor->block, insert_rec, index, offsets, 1, mtr);
+  return insert_rec;
 }
 
 /** Prepend a record to the PAGE_FREE list.
