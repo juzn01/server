@@ -38,6 +38,7 @@ CHANGE MASTER TO master_use_gtid=slave_pos;
 # Slave must eventually apply such load, and correctly (checked).
 
 --connection master
+CREATE TABLE t0 (a int,             b INT) ENGINE=InnoDB;
 CREATE TABLE t1 (a int PRIMARY KEY, b INT) ENGINE=InnoDB;
 INSERT INTO t1 VALUES (1, 0);
 
@@ -58,14 +59,20 @@ while($i > 0)
   --eval XA START '$conn$trx$i'
   --eval   UPDATE t1 SET b = 1 - 2 * $decision WHERE a = 1
   --eval XA END '$conn$trx$i'
-  --eval XA PREPARE '$conn$trx$i'
+  --let $one_phase = `SELECT IF(floor(rand()*10)%2, "ONE PHASE", 0)`
+  if (!$one_phase)
+  {
+    --eval XA PREPARE '$conn$trx$i'
+    --let $one_phase =
+  }
 
   --let $term = COMMIT
-    if ($decision)
-    {
-      --let $term = ROLLBACK
-    }
-  --eval XA $term '$conn$trx$i'
+  if ($decision)
+  {
+    --let $term = ROLLBACK
+    --let $one_phase =
+  }
+  --eval XA $term '$conn$trx$i' $one_phase
 
   --dec $i
 }
@@ -129,6 +136,10 @@ while($i > 0)
     {
     --eval DELETE FROM t1 WHERE a = $i2
     }
+    CREATE TEMPORARY TABLE tmp LIKE t0;
+    --eval INSERT INTO tmp SET a=$i, b= $k
+    INSERT INTO t0 SELECT * FROM tmp;
+    DROP TEMPORARY TABLE tmp;
     --eval XA END '$conn_i$trx$k'
 
     --let $term = COMMIT
@@ -180,6 +191,8 @@ while($i > 0)
 #
 # Overall consistency check
 #
+--let $diff_tables= master:t0, slave:t0
+--source include/diff_tables.inc
 --let $diff_tables= master:t1, slave:t1
 --source include/diff_tables.inc
 
@@ -196,7 +209,7 @@ SET GLOBAL slave_parallel_threads=@old_parallel_threads;
 
 --connection master
 DROP VIEW v_processlist;
-DROP TABLE t1;
+DROP TABLE t0, t1;
 --source include/save_master_gtid.inc
 
 --connection slave

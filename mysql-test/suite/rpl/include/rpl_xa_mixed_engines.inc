@@ -27,8 +27,8 @@ if (!$xid)
 }
 if ($command == run)
 {
+  ## Non-temporary table cases
   # Non transactional table goes first
-
   --eval XA START '$xid'
   --disable_warnings
   INSERT INTO tm VALUES (1);
@@ -42,7 +42,6 @@ if ($command == run)
   --eval $xa_terminate '$xid' $one_phase
 
   # Transactional table goes first
-
   --eval XA START '$xid'
   --disable_warnings
   INSERT INTO t VALUES (2);
@@ -56,7 +55,6 @@ if ($command == run)
   --eval $xa_terminate '$xid' $one_phase
 
   # The pure non-transactional table
-
   --eval XA START '$xid'
   --disable_warnings
   INSERT INTO tm VALUES (3);
@@ -68,7 +66,106 @@ if ($command == run)
   }
   --eval $xa_terminate '$xid' $one_phase
 
-  # Ineffective transactional table operation case
+  ## Temporary tables
+  # create outside xa use at the tail
+  CREATE TEMPORARY TABLE tmp_i LIKE t;
+  CREATE TEMPORARY TABLE tmp_m LIKE tm;
+  --eval XA START '$xid'
+  --disable_warnings
+  INSERT INTO t VALUES (4);
+  INSERT INTO tm VALUES (4);
+  INSERT INTO tmp_i VALUES (4);
+  INSERT INTO tmp_m VALUES (4);
+  INSERT INTO t  SELECT * FROM tmp_i;
+  INSERT INTO tm SELECT * FROM tmp_m;
+  --enable_warnings
+  --eval XA END '$xid'
+  if ($xa_prepare_opt)
+  {
+   --eval XA PREPARE '$xid'
+  }
+  --eval $xa_terminate '$xid' $one_phase
+
+  # temporary tables at the head
+  --eval XA START '$xid'
+  --disable_warnings
+  INSERT INTO tmp_i VALUES (5);
+  INSERT INTO tmp_m VALUES (5);
+  INSERT INTO t  SELECT * FROM tmp_i;
+  INSERT INTO tm SELECT * FROM tmp_m;
+  INSERT INTO t VALUES (5);
+  INSERT INTO tm VALUES (5);
+  --enable_warnings
+  --eval XA END '$xid'
+  if ($xa_prepare_opt)
+  {
+   --eval XA PREPARE '$xid'
+  }
+  --eval $xa_terminate '$xid' $one_phase
+
+  # create inside xa use at the tail
+  DROP TEMPORARY TABLE tmp_i;
+  DROP TEMPORARY TABLE tmp_m;
+
+  --eval XA START '$xid'
+  --disable_warnings
+  INSERT INTO t VALUES (6);
+  INSERT INTO tm VALUES (6);
+  CREATE TEMPORARY TABLE tmp_i LIKE t;
+  CREATE TEMPORARY TABLE tmp_m LIKE tm;
+  INSERT INTO tmp_i VALUES (6);
+  INSERT INTO tmp_m VALUES (6);
+  INSERT INTO t  SELECT * FROM tmp_i;
+  INSERT INTO tm SELECT * FROM tmp_m;
+  --enable_warnings
+  --eval XA END '$xid'
+  if ($xa_prepare_opt)
+  {
+   --eval XA PREPARE '$xid'
+  }
+  --eval $xa_terminate '$xid' $one_phase
+
+  # use at the head
+  DROP TEMPORARY TABLE tmp_i;
+  DROP TEMPORARY TABLE tmp_m;
+  --eval XA START '$xid'
+  --disable_warnings
+  CREATE TEMPORARY TABLE tmp_i LIKE t;
+  CREATE TEMPORARY TABLE tmp_m LIKE tm;
+  INSERT INTO tmp_i VALUES (7);
+  INSERT INTO tmp_m VALUES (7);
+  INSERT INTO t  SELECT * FROM tmp_i;
+  INSERT INTO tm SELECT * FROM tmp_m;
+  INSERT INTO t VALUES (7);
+  INSERT INTO tm VALUES (7);
+  --enable_warnings
+  --eval XA END '$xid'
+  if ($xa_prepare_opt)
+  {
+   --eval XA PREPARE '$xid'
+  }
+  --eval $xa_terminate '$xid' $one_phase
+
+  # use at the tail and drop
+  --eval XA START '$xid'
+  --disable_warnings
+  INSERT INTO t VALUES (8);
+  INSERT INTO tm VALUES (8);
+  INSERT INTO tmp_i VALUES (8);
+  INSERT INTO tmp_m VALUES (8);
+  INSERT INTO t  SELECT * FROM tmp_i;
+  INSERT INTO tm SELECT * FROM tmp_m;
+  DROP TEMPORARY TABLE tmp_i;
+  DROP TEMPORARY TABLE tmp_m;
+  --enable_warnings
+  --eval XA END '$xid'
+  if ($xa_prepare_opt)
+  {
+   --eval XA PREPARE '$xid'
+  }
+  --eval $xa_terminate '$xid' $one_phase
+
+  ## Ineffective transactional table operation case
 
   --eval XA START '$xid'
   UPDATE t SET a = 99 where a = -1;

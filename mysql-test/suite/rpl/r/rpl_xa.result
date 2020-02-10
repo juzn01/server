@@ -40,8 +40,6 @@ connection master;
 xa commit 't';
 xa commit 's';
 SET pseudo_slave_mode=0;
-Warnings:
-Warning	1231	Slave applier execution mode not active, statement ineffective.
 connection slave;
 include/diff_tables.inc [master:t1, slave:t1]
 include/diff_tables.inc [master:t2, slave:t2]

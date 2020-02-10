@@ -128,6 +128,7 @@ DROP TABLE t2, t1;
 #  --enable_result_log
 #  --enable_query_log
 #}
+--replace_result $master_file LOG_FILE $master_pos LOG_POS
 --eval CHANGE MASTER TO MASTER_LOG_FILE='$master_file', MASTER_LOG_POS=$master_pos
  
 SET @@GLOBAL.innodb_limit_optimistic_insert_debug = @saved_innodb_limit_optimistic_insert_debug;

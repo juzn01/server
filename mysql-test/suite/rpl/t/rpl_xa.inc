@@ -30,7 +30,9 @@ let $diff_tables= master:t1, slave:t1;
 source include/diff_tables.inc;
 
 connection master;
+--disable_warnings
 SET pseudo_slave_mode=1;
+--enable_warnings
 create table t2 (a int) engine=InnoDB;
 xa start 't';
 insert into t1 values (5, 6);
@@ -58,8 +60,9 @@ xa recover;
 connection master;
 xa commit 't';
 xa commit 's';
+--disable_warnings
 SET pseudo_slave_mode=0;
-
+--enable_warnings
 sync_slave_with_master;
 let $diff_tables= master:t1, slave:t1;
 source include/diff_tables.inc;
