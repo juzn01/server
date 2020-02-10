@@ -1234,14 +1234,85 @@ inc_dir:
 
   if (mtr->get_log_mode() == MTR_LOG_ALL)
   {
-    const ulint var_hdr= extra_size - fixed_hdr;
-    if (var_hdr)
-      mtr->memcpy<mtr_t::OPT>(*block, insert_buf, rec_get_start(rec, offsets),
-                              var_hdr);
-    mtr->memcpy<mtr_t::OPT>(*block, insert_buf + var_hdr, hdr, fixed_hdr);
-    /* Insert the record. TODO: MEMMOVE from cur->rec */
-    if (data_size)
-      mtr->memcpy<mtr_t::OPT>(*block, insert_buf + extra_size, rec, data_size);
+    /* Temporarily write everything to rec, to simplify the code below. */
+    byte rec_hdr[REC_N_OLD_EXTRA_BYTES];
+    memcpy(rec_hdr, rec - fixed_hdr, fixed_hdr);
+    memcpy(const_cast<rec_t*>(rec - fixed_hdr), hdr, fixed_hdr);
+
+    const byte *c= cur->rec - extra_size;
+    byte *b= insert_buf;
+    const byte *r= rec - extra_size;
+    const byte * const c_end= std::min(cur->rec + data_size,
+                                       block->frame + srv_page_size);
+
+    /* Skip any unchanged prefix of the record. */
+    for (; *b == *r; c++, b++, r++);
+    /* No duplicate records should be inserted! */
+    ut_ad(b < insert_buf + extra_size + data_size);
+
+    /* Try to copy any bytes of the preceding record. */
+    if (UNIV_LIKELY(c >= block->frame && c < c_end))
+    {
+      const byte *cm= c;
+      byte *bm= b;
+      const byte *rm= r;
+      for (; cm < c_end && *rm == *cm; cm++, bm++, rm++);
+      ut_ad(bm <= insert_buf + rec_size);
+      size_t len= static_cast<size_t>(rm - r);
+      ut_ad(!memcmp(r, c, len));
+      if (len > 2)
+      {
+        memcpy(b, c, len);
+        mtr->memmove(*block, page_offset(b), page_offset(c), len);
+        c= cm;
+        b= bm;
+        r= rm;
+      }
+    }
+
+    if (c < cur->rec)
+    {
+      if (!data_size)
+      {
+no_data:
+        mtr->memcpy<mtr_t::FORCED>(*block, b, r, cur->rec - c);
+        goto rec_done;
+      }
+      /* Some header bytes differ. Compare the data separately. */
+      const byte *cd= cur->rec;
+      byte *bd= insert_buf + extra_size;
+      const byte *rd= rec;
+      /* Skip any unchanged prefix of the record. */
+      for (; *bd == *rd; cd++, bd++, rd++)
+        if (bd == insert_buf + rec_size)
+          goto no_data;
+
+      /* Try to copy any data bytes of the preceding record. */
+      const byte *cdm= cd;
+      byte *bdm= bd;
+      const byte *rdm= rd;
+      for (; cdm < c_end && *rdm == *cdm; cdm++, bdm++, rdm++)
+      ut_ad(bdm <= insert_buf + rec_size);
+      size_t len= static_cast<size_t>(rdm - rd);
+      ut_ad(!memcmp(rd, cd, len));
+      if (len > 2)
+      {
+        mtr->memcpy<mtr_t::FORCED>(*block, b, r, cur->rec - c);
+        memcpy(bd, cd, len);
+        mtr->memmove(*block, page_offset(bd), page_offset(cd), len);
+        c= cdm;
+        b= bdm;
+        r= rdm;
+      }
+    }
+
+    if (size_t len= static_cast<size_t>(insert_buf + rec_size - b))
+      mtr->memcpy<mtr_t::FORCED>(*block, b, r, len);
+rec_done:
+    ut_ad(!memcmp(insert_buf, rec - extra_size, rec_size));
+
+    /* Restore the record header. */
+    memcpy(const_cast<rec_t*>(rec - fixed_hdr), rec_hdr, fixed_hdr);
   }
   else
   {
