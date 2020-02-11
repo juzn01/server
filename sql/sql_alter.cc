@@ -395,8 +395,8 @@ bool Sql_cmd_alter_table::execute(THD *thd)
   HA_CREATE_INFO create_info(lex->create_info);
   Alter_info alter_info(lex->alter_info, thd->mem_root);
   create_info.alter_info= &alter_info;
-  ulong priv=0;
-  ulong priv_needed= ALTER_ACL;
+  privilege_t priv(NO_ACL);
+  privilege_t priv_needed(ALTER_ACL);
   bool result;
 
   DBUG_ENTER("Sql_cmd_alter_table::execute");
@@ -505,9 +505,9 @@ bool Sql_cmd_alter_table::execute(THD *thd)
       (!thd->is_current_stmt_binlog_format_row() ||
        !thd->find_temporary_table(first_table)))
   {
-    WSREP_TO_ISOLATION_BEGIN_ALTER((lex->name.str ? select_lex->db.str : NULL),
-                                   (lex->name.str ? lex->name.str : NULL),
-                                   first_table, &alter_info);
+    WSREP_TO_ISOLATION_BEGIN_ALTER((lex->name.str ? select_lex->db.str : first_table->db.str),
+                                   (lex->name.str ? lex->name.str : first_table->table_name.str),
+                                   first_table, &alter_info, used_engine ? &create_info : NULL);
 
     thd->variables.auto_increment_offset = 1;
     thd->variables.auto_increment_increment = 1;

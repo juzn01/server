@@ -12359,7 +12359,7 @@ create_table_info_t::create_foreign_keys()
 					" failed. Column %s was not found.",
 					operation, create_name, k.str(),
 					column_names[i]);
-
+				dict_foreign_free(foreign);
 				return (DB_CANNOT_ADD_CONSTRAINT);
 			}
 			++i;
@@ -12373,6 +12373,7 @@ create_table_info_t::create_foreign_keys()
 					"allowed).",
 					operation, create_name, k.str(), i,
 					MAX_COLS_PER_FK);
+				dict_foreign_free(foreign);
 				return (DB_CANNOT_ADD_CONSTRAINT);
 			}
 		}
@@ -12387,6 +12388,7 @@ create_table_info_t::create_foreign_keys()
 						 k.str(), column_names,
 						 index_error, err_col,
 						 err_index, table);
+			dict_foreign_free(foreign);
 			return (DB_CANNOT_ADD_CONSTRAINT);
 		}
 
