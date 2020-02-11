@@ -1107,7 +1107,6 @@ use_heap:
   }
 
   const ulint extra_size= rec_offs_extra_size(offsets);
-  ut_ad(cur->rec != insert_buf);
   ut_ad(cur->rec != insert_buf + extra_size);
 
   const rec_t* next_rec= page_rec_get_next_low(cur->rec,
