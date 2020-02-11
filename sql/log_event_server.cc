@@ -3418,15 +3418,19 @@ Gtid_log_event::do_apply_event(rpl_group_info *rgi)
     bits|= (ulonglong)OPTION_RPL_SKIP_PARALLEL;
   thd->variables.option_bits= bits;
   DBUG_PRINT("info", ("Set OPTION_GTID_BEGIN"));
-  thd->set_query_and_id(gtid_begin_string, sizeof(gtid_begin_string)-1,
-                        &my_charset_bin, next_query_id());
-  thd->lex->sql_command= SQLCOM_BEGIN;
   thd->is_slave_error= 0;
-  status_var_increment(thd->status_var.com_stat[thd->lex->sql_command]);
+
+  char buf_xa[sizeof("XA START") + 1 + ser_buf_size];
   if (flags2 & FL_PREPARED_XA)
   {
+    const char fmt[]= "XA START %s";
+
     thd->lex->xid= &xid;
     thd->lex->xa_opt= XA_NONE;
+    sprintf(buf_xa, fmt, xid.serialize());
+    thd->set_query_and_id(buf_xa, strlen(buf_xa),
+                          &my_charset_bin, next_query_id());
+    thd->lex->sql_command= SQLCOM_XA_START;
     if (trans_xa_start(thd))
     {
       DBUG_PRINT("error", ("trans_xa_start() failed"));
@@ -3435,12 +3439,16 @@ Gtid_log_event::do_apply_event(rpl_group_info *rgi)
   }
   else
   {
+    thd->set_query_and_id(gtid_begin_string, sizeof(gtid_begin_string)-1,
+                          &my_charset_bin, next_query_id());
+    thd->lex->sql_command= SQLCOM_BEGIN;
     if (trans_begin(thd, 0))
     {
       DBUG_PRINT("error", ("trans_begin() failed"));
       thd->is_slave_error= 1;
     }
   }
+  status_var_increment(thd->status_var.com_stat[thd->lex->sql_command]);
   thd->update_stats();
 
   if (likely(!thd->is_slave_error))
@@ -3905,9 +3913,8 @@ int Xid_apply_log_event::do_apply_event(rpl_group_info *rgi)
                       });
     }
   }
-  /* For a slave Xid_log_event is COMMIT */
-  general_log_print(thd, COM_QUERY,
-                    "COMMIT /* implicit, from Xid_log_event */");
+
+  general_log_print(thd, COM_QUERY, get_query());
   thd->variables.option_bits&= ~OPTION_GTID_BEGIN;
   res= do_commit();
   if (!res && rgi->gtid_pending)

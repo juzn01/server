@@ -3045,6 +3045,7 @@ private:
   int do_record_gtid(THD *thd, rpl_group_info *rgi, bool in_trans,
                      void **out_hton);
   enum_skip_reason do_shall_skip(rpl_group_info *rgi);
+  virtual const char* get_query()= 0;
 #endif
 };
 
@@ -3073,6 +3074,10 @@ public:
      if (direct)
        cache_type= Log_event::EVENT_NO_CACHE;
    }
+  const char* get_query()
+  {
+    return "COMMIT /* implicit, from Xid_log_event */";
+  }
 #ifdef HAVE_REPLICATION
   void pack_info(Protocol* protocol);
 #endif /* HAVE_REPLICATION */
@@ -3240,7 +3245,15 @@ public:
 
 private:
 #if defined(MYSQL_SERVER) && defined(HAVE_REPLICATION)
+  char query[sizeof("XA COMMIT ONE PHASE") + 1 + ser_buf_size];
   int do_commit();
+  const char* get_query()
+  {
+    sprintf(query,
+            (one_phase ? "XA COMMIT %s ONE PHASE" : "XA PREPARE %s"),
+            m_xid.serialize());
+    return query;
+  }
 #endif
 };
 
