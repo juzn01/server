@@ -150,10 +150,10 @@ PageBulk::init()
 
 /** Insert a record in the page.
 @tparam fmt     the page format
-@param[in]	rec		record
+@param[in,out]	rec		record
 @param[in]	offsets		record offsets */
 template<PageBulk::format fmt>
-inline void PageBulk::insertPage(const rec_t *rec, offset_t *offsets)
+inline void PageBulk::insertPage(rec_t *rec, offset_t *offsets)
 {
   ut_ad((m_page_zip != nullptr) == (fmt == COMPRESSED));
   ut_ad((fmt != REDUNDANT) == m_is_comp);
@@ -180,21 +180,15 @@ inline void PageBulk::insertPage(const rec_t *rec, offset_t *offsets)
 #endif /* UNIV_DEBUG */
 
   rec_t* const insert_rec= m_heap_top + extra_size;
-  constexpr size_t fixed_size= fmt == REDUNDANT
-    ? REC_N_OLD_EXTRA_BYTES : REC_N_NEW_EXTRA_BYTES;
-  byte rec_hdr[fmt != COMPRESSED ? fixed_size : 0] __attribute__((unused));
 
   /* Insert the record in the linked list. */
   if (fmt != REDUNDANT)
   {
-    rec_t *next_rec= m_page +
+    const rec_t *next_rec= m_page +
       page_offset(m_cur_rec + mach_read_from_2(m_cur_rec - REC_NEXT));
     if (fmt != COMPRESSED)
-    {
       m_mtr.write<2>(*m_block, m_cur_rec - REC_NEXT,
                      static_cast<uint16_t>(insert_rec - m_cur_rec));
-      memcpy(rec_hdr, rec - fixed_size, fixed_size);
-    }
     else
     {
       mach_write_to_2(m_cur_rec - REC_NEXT,
@@ -213,7 +207,6 @@ inline void PageBulk::insertPage(const rec_t *rec, offset_t *offsets)
   }
   else
   {
-    memcpy(rec_hdr, rec - fixed_size, fixed_size);
     memcpy(const_cast<rec_t*>(rec) - REC_NEXT, m_cur_rec - REC_NEXT, 2);
     m_mtr.write<2>(*m_block, m_cur_rec - REC_NEXT, page_offset(insert_rec));
     rec_set_bit_field_1(const_cast<rec_t*>(rec), 0,
@@ -304,12 +297,7 @@ no_data:
   }
 
 rec_done:
-  if (fmt != COMPRESSED)
-  {
-    ut_ad(!memcmp(m_heap_top, rec - extra_size, rec_size));
-    memcpy(const_cast<rec_t*>(rec) - fixed_size, rec_hdr, fixed_size);
-  }
-
+  ut_ad(fmt == COMPRESSED || !memcmp(m_heap_top, rec - extra_size, rec_size));
   rec_offs_make_valid(insert_rec, m_index, is_leaf, offsets);
 
   /* Update the member variables. */
@@ -330,12 +318,25 @@ rec_done:
 @param[in]	offsets		record offsets */
 inline void PageBulk::insert(const rec_t *rec, offset_t *offsets)
 {
+  byte rec_hdr[REC_N_OLD_EXTRA_BYTES];
+  static_assert(REC_N_OLD_EXTRA_BYTES > REC_N_NEW_EXTRA_BYTES, "file format");
+
   if (UNIV_LIKELY_NULL(m_page_zip))
-    insertPage<COMPRESSED>(rec, offsets);
+    insertPage<COMPRESSED>(const_cast<rec_t*>(rec), offsets);
   else if (m_is_comp)
-    insertPage<DYNAMIC>(rec, offsets);
+  {
+    memcpy(rec_hdr, rec - REC_N_NEW_EXTRA_BYTES, REC_N_NEW_EXTRA_BYTES);
+    insertPage<DYNAMIC>(const_cast<rec_t*>(rec), offsets);
+    memcpy(const_cast<rec_t*>(rec) - REC_N_NEW_EXTRA_BYTES, rec_hdr,
+           REC_N_NEW_EXTRA_BYTES);
+  }
   else
-    insertPage<REDUNDANT>(rec, offsets);
+  {
+    memcpy(rec_hdr, rec - REC_N_OLD_EXTRA_BYTES, REC_N_OLD_EXTRA_BYTES);
+    insertPage<REDUNDANT>(const_cast<rec_t*>(rec), offsets);
+    memcpy(const_cast<rec_t*>(rec) - REC_N_OLD_EXTRA_BYTES, rec_hdr,
+           REC_N_OLD_EXTRA_BYTES);
+  }
 }
 
 /** Set the number of owned records in the uncompressed page of
