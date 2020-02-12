@@ -1383,7 +1383,6 @@ static void btr_page_reorganize_low(page_cur_t *cursor, dict_index_t *index,
                                     mtr_t *mtr)
 {
 	buf_block_t*	block		= page_cur_get_block(cursor);
-	buf_pool_t*	buf_pool	= buf_pool_from_bpage(&block->page);
 	page_t*		page		= buf_block_get_frame(block);
 	buf_block_t*	temp_block;
 	ulint		data_size1;
@@ -1404,7 +1403,7 @@ static void btr_page_reorganize_low(page_cur_t *cursor, dict_index_t *index,
 	data_size1 = page_get_data_size(page);
 	max_ins_size1 = page_get_max_insert_size_after_reorganize(page, 1);
 
-	temp_block = buf_block_alloc(buf_pool);
+	temp_block = buf_block_alloc();
 
 	MONITOR_INC(MONITOR_INDEX_REORG_ATTEMPTS);
 

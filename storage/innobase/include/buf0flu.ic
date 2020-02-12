@@ -34,7 +34,6 @@ Inserts a modified block into the flush list. */
 void
 buf_flush_insert_into_flush_list(
 /*=============================*/
-	buf_pool_t*	buf_pool,	/*!< buffer pool instance */
 	buf_block_t*	block,		/*!< in/out: block which is modified */
 	lsn_t		lsn);		/*!< in: oldest modification */
 
@@ -60,17 +59,12 @@ buf_flush_note_modification(
 	ut_ad(mach_read_from_8(block->frame + FIL_PAGE_LSN) <= end_lsn);
 	mach_write_to_8(block->frame + FIL_PAGE_LSN, end_lsn);
 	if (UNIV_LIKELY_NULL(block->page.zip.data)) {
-		compile_time_assert(FIL_PAGE_LSN % 8 == 0);
-		*reinterpret_cast<uint64_t*>(FIL_PAGE_LSN
-					     + block->page.zip.data)
-			= *reinterpret_cast<const uint64_t*>(FIL_PAGE_LSN
-							     + block->frame);
+		memcpy_aligned<8>(FIL_PAGE_LSN + block->page.zip.data,
+				  FIL_PAGE_LSN + block->frame, 8);
 	}
 
 	if (block->page.oldest_modification == 0) {
-		buf_pool_t*	buf_pool = buf_pool_from_block(block);
-
-		buf_flush_insert_into_flush_list(buf_pool, block, start_lsn);
+		buf_flush_insert_into_flush_list(block, start_lsn);
 	} else {
 		ut_ad(block->page.oldest_modification <= start_lsn);
 	}

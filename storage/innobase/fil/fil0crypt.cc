@@ -653,74 +653,11 @@ byte* fil_space_encrypt(
 		return (src_frame);
 	}
 
-	fil_space_crypt_t* crypt_data = space->crypt_data;
-	const ulint zip_size = space->zip_size();
 	ut_ad(space->pending_io());
 
-	const bool full_crc32 = space->full_crc32();
-
-	byte* tmp = fil_encrypt_buf(crypt_data, space->id, offset,
-				    src_frame, zip_size, dst_frame,
-				    full_crc32);
-
-#ifdef UNIV_DEBUG
-	if (tmp) {
-		/* Verify that encrypted buffer is not corrupted */
-		dberr_t err = DB_SUCCESS;
-		byte* src = src_frame;
-		byte tmp_mem[UNIV_PAGE_SIZE_MAX];
-
-		if (full_crc32) {
-			bool compressed = false, corrupted = false;
-			uint size = buf_page_full_crc32_size(
-				tmp, &compressed, &corrupted);
-			ut_ad(!corrupted);
-			ut_ad(!compressed == (size == srv_page_size));
-			ut_ad(fil_space_decrypt(space->id, crypt_data, tmp_mem,
-						size, space->flags, tmp,
-						&err));
-			ut_ad(err == DB_SUCCESS);
-			memcpy(tmp_mem, src, FIL_PAGE_OFFSET);
-			ut_ad(!memcmp(src, tmp_mem,
-				      (size - FIL_PAGE_FCRC32_CHECKSUM)));
-		} else {
-			bool page_compressed_encrypted =
-				(mach_read_from_2(tmp+FIL_PAGE_TYPE)
-				 == FIL_PAGE_PAGE_COMPRESSED_ENCRYPTED);
-			byte uncomp_mem[UNIV_PAGE_SIZE_MAX];
-
-			if (page_compressed_encrypted) {
-				memcpy(uncomp_mem, src, srv_page_size);
-				ulint unzipped1 = fil_page_decompress(
-					tmp_mem, uncomp_mem, space->flags);
-				ut_ad(unzipped1);
-				if (unzipped1 != srv_page_size) {
-					src = uncomp_mem;
-				}
-			}
-
-			ut_ad(!buf_page_is_corrupted(true, src, space->flags));
-
-			ut_ad(fil_space_decrypt(space->id, crypt_data, tmp_mem,
-						space->physical_size(),
-						space->flags, tmp, &err));
-			ut_ad(err == DB_SUCCESS);
-
-			if (page_compressed_encrypted) {
-				memcpy(tmp_mem, uncomp_mem, srv_page_size);
-				ulint unzipped2 = fil_page_decompress(
-					uncomp_mem, tmp_mem, space->flags);
-				ut_ad(unzipped2);
-			}
-
-			memcpy(tmp_mem + FIL_PAGE_FILE_FLUSH_LSN_OR_KEY_VERSION,
-			       src + FIL_PAGE_FILE_FLUSH_LSN_OR_KEY_VERSION, 8);
-			ut_ad(!memcmp(src, tmp_mem, space->physical_size()));
-		}
-	}
-#endif /* UNIV_DEBUG */
-
-	return tmp;
+	return fil_encrypt_buf(space->crypt_data, space->id, offset,
+			       src_frame, space->zip_size(),
+			       dst_frame, space->full_crc32());
 }
 
 /** Decrypt a page for full checksum format.
@@ -1173,7 +1110,7 @@ static bool fil_crypt_start_encrypting_space(fil_space_t* space)
 		do {
 			ulint n_pages = 0;
 			success = buf_flush_lists(ULINT_MAX, end_lsn, &n_pages);
-			buf_flush_wait_batch_end(NULL, BUF_FLUSH_LIST);
+			buf_flush_wait_batch_end(BUF_FLUSH_LIST);
 			sum_pages += n_pages;
 		} while (!success);
 
@@ -2110,7 +2047,7 @@ fil_crypt_flush_space(
 
 		do {
 			success = buf_flush_lists(ULINT_MAX, end_lsn, &n_pages);
-			buf_flush_wait_batch_end(NULL, BUF_FLUSH_LIST);
+			buf_flush_wait_batch_end(BUF_FLUSH_LIST);
 			sum_pages += n_pages;
 		} while (!success && !space->is_stopping());
 

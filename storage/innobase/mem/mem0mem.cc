@@ -1,7 +1,7 @@
 /*****************************************************************************
 
 Copyright (c) 1994, 2014, Oracle and/or its affiliates. All Rights Reserved.
-Copyright (c) 2017, 2019, MariaDB Corporation.
+Copyright (c) 2017, 2020, MariaDB Corporation.
 
 This program is free software; you can redistribute it and/or modify it under
 the terms of the GNU General Public License as published by the Free Software
@@ -210,8 +210,6 @@ mem_heap_validate(
 		block != NULL;
 		block = UT_LIST_GET_NEXT(list, block)) {
 
-		mem_block_validate(block);
-
 		switch (block->type) {
 		case MEM_HEAP_DYNAMIC:
 			break;
@@ -266,7 +264,6 @@ mem_heap_create_block_func(
 	      || (type == MEM_HEAP_BUFFER + MEM_HEAP_BTR_SEARCH));
 
 	if (heap != NULL) {
-		mem_block_validate(heap);
 		ut_d(mem_heap_validate(heap));
 	}
 
@@ -294,7 +291,7 @@ mem_heap_create_block_func(
 				return(NULL);
 			}
 		} else {
-			buf_block = buf_block_alloc(NULL);
+			buf_block = buf_block_alloc();
 		}
 
 		block = (mem_block_t*) buf_block->frame;
@@ -308,7 +305,6 @@ mem_heap_create_block_func(
 	block->buf_block = buf_block;
 	block->free_block = NULL;
 
-	block->magic_n = MEM_BLOCK_MAGIC_N;
 	ut_d(ut_strlcpy_rev(block->file_name, file_name,
 			    sizeof(block->file_name)));
 	ut_d(block->line = line);
@@ -355,8 +351,6 @@ mem_heap_add_block(
 	mem_block_t*	block;
 	mem_block_t*	new_block;
 	ulint		new_size;
-
-	ut_d(mem_block_validate(heap));
 
 	block = UT_LIST_GET_LAST(heap->base);
 
@@ -410,8 +404,6 @@ mem_heap_block_free(
 
 	buf_block = static_cast<buf_block_t*>(block->buf_block);
 
-	mem_block_validate(block);
-
 	UT_LIST_REMOVE(heap->base, block);
 
 	ut_ad(heap->total_size >= block->len);
@@ -419,7 +411,6 @@ mem_heap_block_free(
 
 	type = heap->type;
 	len = block->len;
-	block->magic_n = MEM_FREED_BLOCK_MAGIC_N;
 
 	if (type == MEM_HEAP_DYNAMIC || len < srv_page_size / 2) {
 		ut_ad(!buf_block);
