@@ -1684,25 +1684,28 @@ page_id_corrupted:
     l+= idlen;
     rlen-= idlen;
     got_page_op = !(b & 0x80);
-    if ((b & 0x80) || !apply || is_predefined_tablespace(space_id) ||
-        recv_spaces.find(space_id) != recv_spaces.end());
-    else if (recovered_lsn < mlog_checkpoint_lsn)
-      /* We have not seen all records between the checkpoint and
-      FILE_CHECKPOINT. There should be a FILE_DELETE for this
-      tablespace later. */
-      recv_spaces.emplace(space_id, file_name_t("", false));
-    else
+    if (got_page_op && apply && !is_predefined_tablespace(space_id))
     {
-      const page_id_t id(space_id, page_no);
-      if (!srv_force_recovery)
+      recv_spaces_t::iterator i= recv_spaces.lower_bound(space_id);
+      if (i != recv_spaces.end() && i->first == space_id);
+      else if (recovered_lsn < mlog_checkpoint_lsn)
+        /* We have not seen all records between the checkpoint and
+        FILE_CHECKPOINT. There should be a FILE_DELETE for this
+        tablespace later. */
+        recv_spaces.emplace_hint(i, space_id, file_name_t("", false));
+      else
       {
-        ib::error() << "Missing FILE_DELETE or FILE_MODIFY for " << id
-                    << " at " << recovered_lsn
-                    << "; set innodb_force_recovery=1 to ignore the record.";
-        goto corrupted;
+        const page_id_t id(space_id, page_no);
+        if (!srv_force_recovery)
+        {
+          ib::error() << "Missing FILE_DELETE or FILE_MODIFY for " << id
+                      << " at " << recovered_lsn
+                      << "; set innodb_force_recovery=1 to ignore the record.";
+          goto corrupted;
+        }
+        ib::warn() << "Ignoring record for " << id << " at " << recovered_lsn;
+        continue;
       }
-      ib::warn() << "Ignoring record for " << id << " at " << recovered_lsn;
-      continue;
     }
 same_page:
     DBUG_PRINT("ib_log",
